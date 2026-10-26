@@ -1,465 +1,1090 @@
 # VGM MCP
 
-Serwer MCP do TradingView. Czyta rynek, steruje wykresem i sprawdza,
-czy sygnał jest cokolwiek wart.
+Serwer MCP (Model Context Protocol) do TradingView. Pozwala modelowi czytać
+dane rynkowe, sprawdzać kod Pine Script, sterować wykresem otwartym w przeglądarce
+i mierzyć, czy dany sygnał (np. „RSI poniżej 30") cokolwiek zapowiada.
 
 ![Wilk z lupą nad wykresem](obrazy/glowna.png)
 
-Sześćdziesiąt trzy narzędzia, dziewięćdziesiąt jeden pól danych, dziesięć rynków.
+Serwer ma **63 narzędzia** o nazwach `vgm_*`. Nie wszystkie wymagają tego samego,
+dlatego zaczynamy od tabeli.
 
-Cztery warstwy, każda o innych wymaganiach:
-
-| warstwa | narzędzi | czego potrzebuje |
-|---|---:|---|
-| dane, analiza, sprawdzanie Pine | 20 | niczego: ani konta, ani przeglądarki |
-| pomiar wartości sygnału | 10 | świec z wykresu |
-| wykres, odtwarzanie, układ okna | 24 | otwartej karty TradingView |
-| alerty, listy, zapis Pine, tester | 9 | zalogowanego konta |
-
----
-
-## Po co
-
-Większość narzędzi tego typu nie ruszy bez uruchomionej aplikacji TradingView.
-Sięgają też po garść pól, zwykle sześć albo dwanaście, choć publicznie
-dostępnych jest dziewięćdziesiąt jeden.
-
-VGM bierze wszystkie dziewięćdziesiąt jeden, a warstwa danych i analizy chodzi
-na serwerze bez żadnego okna. Do tego ma coś, czego nie ma nikt inny: warstwę
-sprawdzającą, czy sygnał daje przewagę, czy tylko tak wygląda.
-
----
-
-## Narzędzia
-
-### Odczyt
-
-| narzędzie | do czego | sprawdzone na |
+| warstwa | co robi | czego potrzebuje |
 |---|---|---|
-| `vgm_odczyt` | wybrane pola dla instrumentu | FX:EURUSD, 91 pól |
-| `vgm_obraz` | wszystkie 91 pól naraz, w dziewięciu grupach | FX:EURUSD |
-| `vgm_pola` | spis dostępnych pól, do sprawdzenia przed zgadywaniem nazwy | tylko wywołanie |
-| `vgm_rynki` | spis dziesięciu sprawdzonych rynków | tylko wywołanie |
-| `vgm_obraz_pelny` | wszystko o instrumencie jednym wywołaniem | FX:EURUSD, 6 sekcji |
+| dane i analiza | odczyt pól, położenie ceny, wiele przedziałów czasu, porównania, skany rynku | tylko internetu |
+| Pine Script | sprawdzanie kodu w kompilatorze TradingView, szkielet skryptu | tylko internetu |
+| wykres | sterowanie kartą TradingView, świece, zrzut ekranu, odtwarzanie historii, układ okna, **pomiar sygnałów** | przeglądarka z debugowaniem (CDP) i otwartą kartą TradingView |
+| sesja | alerty, zapisane skrypty Pine, lista obserwowanych, Strategy Tester | to samo co wykres, plus zalogowane konto TradingView |
 
-### Położenie ceny
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_polozenie` | miejsce ceny w kanale Bollingera, w rozpiętości rocznej, względem średnich | FX:EURUSD |
-| `vgm_srednie` | układ sześciu średnich wykładniczych od 5 do 200 | FX:EURUSD |
-
-### Wiele przedziałów czasu
-
-| narzędzie | do czego |
-|---|---|
-| `vgm_mtf` | ten sam wskaźnik na kilku przedziałach, jednym zapytaniem |
-| `vgm_zgodnosc` | ile przedziałów wskazuje w tę samą stronę |
-| `vgm_zgodnosc_pelna` | tabela wielu wskaźników na wielu przedziałach |
-
-### Porównania i skany
-
-| narzędzie | do czego |
-|---|---|
-| `vgm_wiele` | kilka instrumentów w jednym zapytaniu |
-| `vgm_porownaj` | instrumenty obok siebie, po sile ruchu |
-| `vgm_skan_wyprzedane` | RSI poniżej progu |
-| `vgm_skan_wykupione` | RSI powyżej progu |
-| `vgm_skan_trend` | ADX powyżej progu, z kierunkiem |
-| `vgm_skan_wolumen` | wolumen ponad wielokrotność średniej z dziesięciu dni |
-| `vgm_skan` | dowolny filtr TradingView |
-
-### Wykres
-
-![Wykres z narzędziami](obrazy/wykres.png)
-
-Instrumenty na obrazkach są wymyślone. Zrzuty pokazują układ, nie czyjeś konto.
-
-
-Ta grupa wymaga otwartej karty z TradingView. Port podajesz w `VGM_CDP_PORT`.
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_wykres_zdrowie` | czy da się sterować, sprawdź przed resztą | karta z wykresem |
-| `vgm_wykres_stan` | instrument, przedział, typ, wskaźniki, rysunki | BATS:AAPL, FX:GBPUSD |
-| `vgm_wykres_wartosci` | bieżące wartości wskaźników z wykresu | RSI 53,16 i Volume |
-| `vgm_wykres_przelacz` | zmiana instrumentu Z WERYFIKACJĄ danych | EURUSD i złoto, ceny zgodne |
-| `vgm_wykres_symbol` | zmiana instrumentu | AAPL na EURUSD, potwierdzone odczytem |
-| `vgm_wykres_interwal` | zmiana przedziału czasu | D na 60, potwierdzone odczytem |
-| `vgm_wykres_typ` | świece, słupki, linia, Heikin Ashi | wywołanie przechodzi |
-| `vgm_wskaznik_dodaj` | dodanie wskaźnika po nazwie | RSI dodany i widoczny |
-| `vgm_wskaznik_usun` | usunięcie po identyfikatorze | RSI usunięty |
-| `vgm_wykres_swiece` | świece historyczne z pełnym OHLCV | 300 świec GBPUSD 1h |
-| `vgm_wykres_zrzut` | obraz wykresu do pliku PNG | 84 KB, wykres widoczny |
-| `vgm_swiece_statystyka` | rozpiętość, zasięg świec, udział wzrostowych, luki | 200 świec GBPUSD |
-| `vgm_swiece_zmiennosc` | zmienność w dwóch oknach i ich stosunek | 2 okna po 20 świec |
-| `vgm_swiece_przedzialy` | statystyka świec z kilku przedziałów naraz | 15, 60 i 240 minut |
-
-`vgm_wykres_wartosci` czyta również wskaźniki własne, napisane w Pine. Publiczne
-dane ich nie znają, bo istnieją tylko na Twoim wykresie.
-
-`vgm_wykres_swiece` bierze historię z serii, którą wykres i tak ma wczytaną. Zwykle
-dostępnych jest kilkaset świec z czasem, otwarciem, szczytem, dołkiem, zamknięciem
-i wolumenem. Żadne osobne źródło danych nie jest potrzebne.
-
-`vgm_wykres_zrzut` zapisuje obraz wykresu do pliku. Model może dzięki temu wykres
-obejrzeć, a nie tylko odczytać z niego liczby.
-
-
-🔴 **Bez zalogowania TradingView liczy tylko jeden wskaźnik naraz.** Zmierzone:
-po wyczyszczeniu wykresu pierwszy dodany zaczyna zwracać wartości, drugi i trzeci
-pojawiają się na liście, ale ich serie zostają puste. `vgm_wskaznik_dodaj`
-czeka na dane i w odpowiedzi mówi, czy wskaźnik faktycznie liczy.
-
-Chcesz kilku naraz, zaloguj się. Chcesz jednego, usuń poprzedni przez
-`vgm_wskaznik_usun`.
----
-
-### Sesja
-
-Ta grupa wymaga zalogowanego konta TradingView w przeglądarce z CDP. Sesję
-sprawdzamy przez ciasteczko HttpOnly, bo z JavaScriptu strony nie widać go nigdy.
-Alerty i skrypty idą zwykłym HTTP z tymi ciasteczkami, bez klikania w stronę.
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_sesja` | czy jest sesja i jaki plan | konto pro_premium |
-| `vgm_alerty` | wszystkie alerty cenowe z konta | 208 alertów |
-| `vgm_lista_obserwowanych` | instrumenty z otwartej listy w panelu | 29 symboli, lista Forex |
-| `vgm_skrypty_pine` | skrypty Pine zapisane na koncie | 59 skryptów |
-| `vgm_zrodlo_pine` | kod zapisanego skryptu | 6316 znaków |
-| `vgm_zapisz_pine` | zapis nowego skryptu na konto | lista 59 → 60 → 59 po usunięciu |
-| `vgm_usun_pine` | usunięcie skryptu, nieodwracalne | testowy usunięty |
-| `vgm_strategie_wbudowane` | wbudowane strategie z identyfikatorami | 20 ze 145 |
-| `vgm_tester_raport` | Strategy Tester: raport strategii z wykresu | panel otwarty, raport odczytany |
-
-Z zalogowanym kontem znika też ograniczenie jednego wskaźnika: cztery naraz
-liczyły się bez problemu.
-
----
-### Odtwarzanie historii
-
-Wykres cofa się do wybranej daty i idzie świeca po świecy, bez podglądania
-przyszłości. Do przechodzenia strategii ręcznie albo sprawdzania, jak sygnał
-wyglądał w danym dniu.
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_replay_stan` | czy dostępne, czy trwa, na której świecy stoi | EURUSD, historia od 2001-11-28 |
-| `vgm_replay_start` | cofnięcie wykresu do daty | data podana i początek historii |
-| `vgm_replay_krok` | przesunięcie o N świec | 4 kroki na świecach 3-minutowych = 12 minut |
-| `vgm_replay_autoplay` | samoczynne przesuwanie, z prędkością | 300 ms: 6 sekund realnych = 69 minut wykresu |
-| `vgm_replay_stop` | powrót do czasu rzeczywistego | pasek schowany, wykres przywrócony |
-
-Data jako `YYYY-MM-DD`, `YYYY-MM-DD HH:MM` albo sekundy. `vgm_replay_krok`
-zwraca `ruszyl`, bo API potwierdza krok także wtedy, gdy wykres stoi.
+Narzędzia pomiaru sygnałów liczą na świecach z wykresu, więc należą do warstwy
+wykresu, mimo że nie dotykają samej strony.
 
 ---
 
-### Układ okna
+## Wymagania
 
-Kilka wykresów obok siebie, każdy z własnym instrumentem i przedziałem.
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_uklad_stan` | układ, liczba wykresów, co na każdym stoi | 2v: EURUSD 3 min i GBPUSD 60 min |
-| `vgm_uklad_ustaw` | podział okna: s, 2h, 2v, 2-1, 3h, 3v, 4, 6, 8 | 2h i 2v, powrót do s |
-| `vgm_uklad_wybierz` | który wykres jest aktywny | indeksy 0 i 1 |
-| `vgm_uklad_symbol` | instrument na wybranym wykresie | GBPUSD i USDJPY na drugim |
-
-Pozostałe narzędzia wykresu działają na wykresie aktywnym, więc
-`vgm_uklad_wybierz` jest przełącznikiem dla nich wszystkich.
-
----
-![Cztery wykresy naraz](obrazy/uklad.png)
+- **Python 3.12 lub nowszy.** Kod używa składni f-stringów dostępnej od 3.12
+  (np. w `src/dane.py`), więc na starszym Pythonie moduł nie zaimportuje się.
+- Pakiety z `requirements.txt`:
+  - `mcp>=1.0.0` – biblioteka serwera MCP,
+  - `websocket-client>=1.6.0` – potrzebny tylko warstwie wykresu i sesji
+    (importowany dopiero przy pierwszym użyciu takiego narzędzia).
+- Dostęp do internetu (publiczne punkty TradingView).
+- Dla warstwy wykresu i sesji: przeglądarka na silniku Chromium uruchomiona
+  z włączonym zdalnym debugowaniem (CDP) i karta z `tradingview.com`.
+  Warstwa sesji dodatkowo wymaga, żeby w tej przeglądarce było zalogowane
+  konto TradingView.
+- Żadnych kluczy API ani tokenów. Serwer nie ma ich w konfiguracji.
 
 ---
 
-### Pine Script
-
-Bez przeglądarki i bez konta.
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_pine_sprawdz` | kompilacja z dokładną linią i kolumną błędu | kod poprawny, jeden błąd, dwa błędy |
-| `vgm_pine_sprawdz_plik` | to samo, z pliku na dysku | tylko wywołanie |
-| `vgm_pine_szkielet` | gotowy punkt wyjścia, sam się kompiluje | kompiluje się bez błędu |
-
-Sprawdzenie trwa około sekundy i wygląda tak:
-
-```
-   3 | plot(ta.sma(clse, 20))
-     |             ^-- Undeclared identifier 'clse'
-```
-
-Kolumna po prawej mówi, na czym dane narzędzie zostało uruchomione. Puste pole
-znaczy, że sprawdziłem tylko, czy się wywołuje.
-
----
-
-### Pomiar
-
-
-![Wynik pomiaru sygnału](obrazy/pomiar.png)
-
-Ta grupa nie liczy sygnału. Sprawdza, czy sygnał jest cokolwiek wart.
-
-| narzędzie | do czego | sprawdzone na |
-|---|---|---|
-| `vgm_zmierz_prog` | czy przekroczenie progu cokolwiek zapowiada | RSI 30, 300 świec |
-| `vgm_porownaj_progi` | ten sam pomiar na kilku progach naraz | pięć progów RSI |
-| `vgm_walk_forward` | próg wybrany na 70% historii, sprawdzony na 30% — jedyny pomiar poza próbą; progi z percentyli wskaźnika | złoto dzienne: RSI z 2,24 na uczeniu, −0,44 poza próbą |
-| `vgm_zmierz` | to samo dla czterech wskaźników | RSI, Bollinger, ADX, ATR |
-| `vgm_przeglad_wskaznikow` | siedem warunków jednym przebiegiem | GBPUSD 1h, 300 świec |
-| `vgm_sygnal_czy_trend` | czy warunek wnosi coś ponad sam trend | złoto, ropa, srebro |
-| `vgm_odniesienie_trzymanie` | ile daje samo trzymanie bez sygnału | 265 wejść |
-| `vgm_jak_dlugo_trzymac` | po ilu świecach sygnał daje najwięcej | złoto i ropa, 5 długości |
-| `vgm_koszt_a_przewaga` | przy jakim koszcie sygnał traci sens | złoto i ropa, 6 poziomów |
-
-Pięć warunków, wszystkie muszą być spełnione naraz:
-
-**Dodatni zwrot po spreadzie.** Koszt wejścia wchodzi do rachunku.
-
-**Przewaga nad sygnałem losowym.** Ten sam pomiar na losowych wejściach
-o tej samej częstości. Placebo bywa gorsze od stratnego sygnału, więc samo
-pobicie go nie wystarcza.
-
-**Zgodność obu połów okresu.** Placebo i z-score liczone osobno dla każdej
-połowy. Liczy się znak przewagi nad placebo w obu, nie sam zysk: zysk w obu
-połowach może być wspólny dla całego rynku, przewaga nad losowym wejściem już nie.
-
-**Co najmniej dwadzieścia wejść.** Trzy trafienia na trzy próby to przypadek.
-
-**Przewaga większa niż rozrzut placebo.** Losowań jest pięćdziesiąt, z jawnym
-ziarnem. Narzędzie liczy ich odchylenie i z-score prawdziwego wyniku. Poniżej
-jednego odchylenia to szum, nawet gdy liczba wygląda dobrze. Losowe wejścia
-biorą się tylko ze świec o zmienności z tych samych kwintyli, w których wypadły
-świece sygnału: warunek „ATR powyżej progu" trafia w burzliwe świece i wobec
-spokojnych wyglądałby raz lepiej, raz gorzej niż jest. Na złocie zmieniało to
-z-score z −1,55 na 0,19 w jedną stronę i z 0,06 na −0,70 w drugą.
-
-Pomiar bierze domyślnie całą historię, jaką wykres ma wczytaną. Świeże
-przełączenie symbolu daje około 400 świec i nic tego nie doczytuje: ani
-przewijanie, ani zakres widoku, ani otwarcie testera (sprawdzone). Pełne 2518
-świec na złocie dziennym pojawiło się tylko przy strategii z głębokim testem
-na wykresie. Na trzystu świecach jeden warunek wyglądał na
-sygnał; na dziesięciu latach ma z-score −0,69 i wypada gorzej niż losowe wejście.
-
-Przegląd siedmiu warunków na czterech wskaźnikach dał wynik odmowny w całości:
-
-```
-ADX poniżej 15:   +0,1687%   85,7% trafień   ale 7 wejść
-RSI poniżej 30:   +0,0416%   76,5% trafień   ale 17 wejść
-ADX powyżej 30:   -0,0260%   40,1% trafień   137 wejść, zwrot ujemny
-```
-
-Dwa pierwsze wyglądają świetnie i oba odpadają na liczbie wejść. Trzeci ma dość
-wejść, ale traci po spreadzie. Narzędzie mówi to wprost, zamiast wybierać
-najładniejszy wiersz.
-
-Warstwa pomiaru powstała po to, żeby odsiewać sygnały, które tylko wyglądają
-dobrze. Pierwszy badany warunek odpadł: na złocie dawał sześć procent tam, gdzie
-zwykłe kupno z trzymaniem dawało trzydzieści.
-
-Po drodze te same narzędzia wykryły trzy błędy w moich własnych obliczeniach,
-każdy wyglądający na sukces. Pełny przebieg badania: [POMIARY.md](POMIARY.md).
-
----
-
-## Pola danych
-
-Sześćdziesiąt dwa pola, wszystkie sprawdzone na żywym rynku:
-
-**Cena.** Otwarcie, zamknięcie, szczyt, dołek, luka, zmiana, VWAP
-**Wolumen.** Bieżący, średnia dziesięciodniowa, stosunek jednego do drugiego
-**Pęd.** RSI, RSI7, Stochastic K i D, Stochastic RSI K i D, CCI, Momentum, Awesome, ROC, Ultimate, Williams, przepływ pieniądza, przepływ Chaikina
-**Trend.** ADX z obiema składowymi kierunkowymi, MACD z linią i histogramem, Parabolic SAR, Aroon w górę i w dół, pełny Ichimoku (bazowa, konwersji, obie wyprzedzające)
-**Średnie.** SMA i EMA po siedem każda, od 5 do 200, plus VWMA i Hull
-**Zmienność.** ATR, wstęgi Bollingera, siła wstęg, zmienność dzienna, tygodniowa i miesięczna, kanały Donchiana i Keltnera
-**Poziomy.** Pięć systemów punktów zwrotnych (klasyczny, Fibonacciego, Woodiego, Camarilli, DeMarka) oraz szczyt i dołek z roku
-**Wyniki.** Tydzień, miesiąc, trzy i sześć miesięcy, od początku roku, rok, pięć lat
-**Ocena.** Zbiorcza TradingView, osobno dla średnich i oscylatorów, plus ocena siedmiu pojedynczych wskaźników
-
-Każde z tych pól przyjmuje przyrostek z przedziałem czasu. `RSI|240` daje RSI z czterech godzin. Zmierzone przedziały: 1, 5, 15, 60, 240 minut oraz tydzień.
-
-Dziewięćdziesiąt jeden pól razy sześć przedziałów to 546 wartości. Jedno zapytanie.
-
----
-
-## Jak zacząć
+## Instalacja
 
 ```bash
-pip install mcp
+git clone https://github.com/Slavicboyyy/vgm-mcp.git
+cd vgm-mcp
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-W ustawieniach klienta MCP:
+Serwer uruchamia się poleceniem `python3 src/serwer.py` i rozmawia z klientem
+przez standardowe wejście/wyjście (stdio). Normalnie nie uruchamiasz go ręcznie,
+tylko wpisujesz do konfiguracji klienta MCP.
+
+## Konfiguracja
+
+### Klient MCP
+
+Do ustawień klienta MCP dodaj serwer (ścieżki zamień na swoje; jeśli instalujesz
+w wirtualnym środowisku, w `command` podaj ścieżkę do jego `python`):
 
 ```json
 {
   "mcpServers": {
     "vgm": {
-      "command": "python3",
-      "args": ["/ścieżka/do/vgm-mcp/src/serwer.py"]
+      "command": "/SCIEZKA/DO/vgm-mcp/.venv/bin/python",
+      "args": ["/SCIEZKA/DO/vgm-mcp/src/serwer.py"],
+      "env": {
+        "VGM_CDP_PORT": "9222"
+      }
     }
   }
 }
 ```
 
-Sprawdzenie bez klienta MCP:
+Blok `env` jest opcjonalny i potrzebny tylko warstwom wykresu i sesji.
+
+### Zmienna środowiskowa
+
+Jedyna zmienna, którą czyta kod, to `VGM_CDP_PORT` – port zdalnego debugowania
+przeglądarki.
+
+- Gdy jest ustawiona, jest używana.
+- Gdy jej brak, kod sprawdza po kolei porty `9333`, `9556`, `9222` i bierze pierwszy,
+  który odpowiada na `http://localhost:<port>/json/version`. Jeśli żaden nie
+  odpowiada, przyjmuje `9222`.
+
+### Przeglądarka dla warstwy wykresu i sesji
+
+Uruchom przeglądarkę Chromium z debugowaniem na wybranym porcie, np. z flagą
+`--remote-debugging-port=9222`, otwórz w niej `https://www.tradingview.com/chart/`
+i (dla warstwy sesji) zaloguj się na swoje konto. Potem wywołaj `vgm_wykres_zdrowie`,
+żeby sprawdzić, czy serwer widzi kartę.
+
+Jeśli karty nie ma, `vgm_wykres_karta` otworzy nową przez przeglądarkę.
+
+---
+
+## Odpowiedzi i błędy
+
+Każde narzędzie zwraca jeden blok tekstu z JSON-em (`ensure_ascii=False`, wcięcie 1).
+Poniżej przy każdym narzędziu jest **kształt** odpowiedzi: nazwy kluczy z kodu,
+a w miejscu wartości opis typu w nawiasach ostrych. To nie są prawdziwe notowania.
+
+Błędy też są JSON-em, nie wyjątkiem:
+
+```json
+{"blad": "<treść>", "narzedzie": "vgm_nazwa"}
+```
+
+Narzędzia wykresu i sesji dokładają do niego pole `podpowiedz`
+(odpowiednio: „sprawdź vgm_wykres_zdrowie" i „zaloguj się na TradingView
+w przeglądarce z CDP"). Brak wymaganego parametru daje
+`{"blad": "brakuje wymaganego pola: 'symbol'", "narzedzie": "..."}`.
+
+Do każdego opisu narzędzia serwer dopisuje zastrzeżenie, że dane pochodzą
+z publicznego punktu TradingView, a nie od brokera.
+
+Symbol zawsze podajesz z giełdą: `FX:EURUSD`, `NASDAQ:NVDA`, `COINBASE:BTCUSD`.
+Przedziały czasu: `1`, `5`, `15`, `60`, `240`, `1W`. Tyle przedziałów
+zostało sprawdzonych dla danych publicznych (`vgm_pola` zwraca je w polu
+`interwaly_zmierzone`).
+
+---
+
+## Narzędzia
+
+Parametry oznaczone **(wym.)** są wymagane. Wartości domyślne podano po `=`.
+
+### Odczyt (6 narzędzi)
+
+#### `vgm_odczyt`
+Wartości wybranych pól dla jednego instrumentu.
+Parametry: `symbol` (wym.), `pola` – lista nazw pól (pominięta = zestaw domyślny:
+cena, 12 pierwszych wskaźników i trzy oceny zbiorcze).
+
+```json
+{"symbol": "FX:EURUSD", "pola": ["close", "RSI", "ADX"]}
+```
+```
+{ "close": <liczba>, "RSI": <liczba>, "ADX": <liczba> }
+```
+Klucz to nazwa pola, wartość może być `null`. Zła nazwa instrumentu daje błąd
+„brak danych dla …".
+
+#### `vgm_obraz`
+Wszystkie 91 pól jednym zapytaniem, w dziewięciu grupach.
+Parametry: `symbol` (wym.), `interwal` (pominięty = bieżący).
+
+```json
+{"symbol": "FX:EURUSD", "interwal": "60"}
+```
+```
+{ "symbol": "FX:EURUSD", "interwal": "60",
+  "cena": {"close": <liczba>, ...}, "wolumen": {...}, "ped": {...},
+  "trend": {...}, "srednie": {...}, "zmiennosc": {...},
+  "poziomy": {...}, "wynik": {...}, "ocena": {...} }
+```
+Pola bez wartości są pomijane w grupach. Bez `interwal` zamiast przedziału
+dostajesz `"interwal": "biezacy"`.
+
+#### `vgm_obraz_pelny`
+Wszystko o instrumencie jednym wywołaniem.
+Parametry: `symbol` (wym.).
+
+```json
+{"symbol": "FX:EURUSD"}
+```
+```
+{ "symbol": "...",
+  "pola": <wynik vgm_obraz>, "polozenie": <wynik vgm_polozenie>,
+  "srednie": <wynik vgm_srednie>, "zgodnosc": <wynik vgm_zgodnosc_pelna>,
+  "wykres": <wynik vgm_wykres_stan> lub {"niedostepny": "<powód>"},
+  "wskazniki_z_wykresu": [...]   // tylko gdy wykres dostępny
+}
+```
+Bez przeglądarki dostajesz część publiczną, a pole `wykres` mówi, że jest niedostępny.
+
+#### `vgm_rynki`
+Spis rynków przyjmowanych przez skany. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "forex": "pary walutowe", "crypto": "kryptowaluty", "coin": "kryptowaluty, inny zestaw",
+  "america": "...", "poland": "...", "germany": "...", "uk": "...",
+  "japan": "...", "futures": "...", "cfd": "..." }
+```
+
+#### `vgm_pola`
+Spis dostępnych pól z podziałem na grupy. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "cena": [<nazwy pól>], "wolumen": [...], "ped": [...], "trend": [...],
+  "srednie": [...], "zmiennosc": [...], "poziomy": [...], "wynik": [...],
+  "ocena": [...], "interwaly_zmierzone": ["1","5","15","60","240","1W"] }
+```
+Do każdego pola można dopisać przyrostek przedziału, np. `RSI|60`.
+
+#### `vgm_polozenie`
+Gdzie stoi cena względem swoich odniesień, w procentach.
+Parametry: `symbol` (wym.), `interwal`.
+
+```json
+{"symbol": "FX:EURUSD"}
+```
+```
+{ "symbol": "...", "interwal": "biezacy", "cena": <liczba>,
+  "w_kanale_bollingera_proc": <liczba|null>, "w_zakresie_rocznym_proc": <liczba|null>,
+  "nad_ema20_proc": ..., "nad_ema50_proc": ..., "nad_ema200_proc": ...,
+  "szerokosc_bollingera_proc": ..., "atr_proc_ceny": ... }
+```
+
+### Średnie i wiele przedziałów czasu (4)
+
+#### `vgm_srednie`
+Układ sześciu średnich wykładniczych (EMA 5, 10, 20, 50, 100, 200).
+Parametry: `symbol` (wym.), `interwal`.
+
+```json
+{"symbol": "FX:EURUSD"}
+```
+```
+{ "symbol": "...", "interwal": "biezacy",
+  "srednie": {"EMA5": <liczba>, ..., "EMA200": <liczba>}, "cena": <liczba>,
+  "par_w_kolejnosci_rosnacej": <int>, "par_w_kolejnosci_malejacej": <int>,
+  "par_razem": <int>, "uporzadkowane_w_pelni": <true|false> }
+```
+Zwraca fakt o ułożeniu średnich, nie ocenę trendu.
+
+#### `vgm_mtf`
+Te same wskaźniki na kilku przedziałach jednym zapytaniem.
+Parametry: `symbol` (wym.), `wskazniki` (= RSI, ADX, Recommend.All),
+`interwaly` (= 5, 15, 60, 240).
+
+```json
+{"symbol": "FX:EURUSD", "wskazniki": ["RSI"], "interwaly": ["15", "60"]}
+```
+```
+{ "RSI": {"15": <liczba|null>, "60": <liczba|null>} }
+```
+
+#### `vgm_zgodnosc`
+Ile przedziałów wskazuje w tę samą stronę według RSI. Nie podejmuje decyzji
+handlowej, tylko zlicza.
+Parametry: `symbol` (wym.), `interwaly` (= 5, 15, 60, 240),
+`prog_kupno` = 55, `prog_sprzedaz` = 45.
+
+```json
+{"symbol": "FX:EURUSD", "prog_kupno": 60, "prog_sprzedaz": 40}
+```
+```
+{ "symbol": "...", "rsi": {"5": <liczba|null>, ...},
+  "za_kupnem": ["<przedział>", ...], "za_sprzedaza": [...],
+  "bez_danych": [...], "wszystkie_zgodne": <true|false> }
+```
+
+#### `vgm_zgodnosc_pelna`
+Tabela wielu wskaźników na wielu przedziałach.
+Parametry: `symbol` (wym.), `wskazniki` (= RSI, ADX, MACD.hist, Recommend.All),
+`interwaly` (= 1, 5, 15, 60).
+
+```json
+{"symbol": "FX:EURUSD", "wskazniki": ["RSI", "ADX"], "interwaly": ["15", "60"]}
+```
+```
+{ "symbol": "...", "interwaly": ["15","60"],
+  "wartosci": {"RSI": {"15": <liczba|null>, "60": ...}, "ADX": {...}},
+  "brakujace": ["RSI|15", ...] }
+```
+
+### Porównania i skany (7)
+
+#### `vgm_wiele`
+Kilka instrumentów jednym zapytaniem.
+Parametry: `symbole` (wym.), `pola` (= close, open, high, low, RSI, ADX, Recommend.All).
+
+```json
+{"symbole": ["FX:EURUSD", "FX:GBPUSD"], "pola": ["close", "RSI"]}
+```
+```
+[ {"symbol": "FX:EURUSD", "close": <liczba>, "RSI": <liczba>},
+  {"symbol": "FX:GBPUSD", ...} ]
+```
+Zapytanie idzie zawsze do punktu `/forex/scan` (zob. [Znane ograniczenia](#znane-ograniczenia)).
+
+#### `vgm_porownaj`
+To samo co `vgm_wiele`, ale posortowane malejąco po wartości bezwzględnej pola `change`.
+Parametry: `symbole` (wym.), `pola` (= close, change, RSI, ADX,
+relative_volume_10d_calc, Recommend.All).
+
+```json
+{"symbole": ["FX:EURUSD", "FX:GBPUSD", "FX:USDJPY"]}
+```
+```
+[ {"symbol": "...", "close": <liczba>, "change": <liczba>, "RSI": ..., "ADX": ...,
+   "relative_volume_10d_calc": ..., "Recommend.All": ...}, ... ]
+```
+
+Cztery gotowe skany mają ten sam kształt odpowiedzi: lista wierszy
+`{"symbol": ..., <kolumny>}`; różnią się warunkiem i kolumnami. Wspólne
+parametry: `rynek` = forex (jeden z: forex, crypto, coin, america, poland,
+germany, uk, japan, futures, cfd), `ile` = 20.
+
+#### `vgm_skan_wyprzedane`
+RSI poniżej progu. Parametry: `rynek` = forex, `prog` = 30, `ile` = 20.
+Kolumny: close, change, RSI, ADX, volume.
+
+```json
+{"rynek": "forex", "prog": 30, "ile": 5}
+```
+```
+[ {"symbol": "...", "close": <liczba>, "change": <liczba>, "RSI": <liczba>,
+   "ADX": <liczba>, "volume": <liczba>}, ... ]
+```
+
+#### `vgm_skan_wykupione`
+RSI powyżej progu. Parametry: `rynek` = forex, `prog` = 70, `ile` = 20. Kolumny jak wyżej.
+
+```json
+{"rynek": "america", "prog": 75}
+```
+```
+[ {"symbol": "...", "close": ..., "change": ..., "RSI": ..., "ADX": ..., "volume": ...} ]
+```
+
+#### `vgm_skan_trend`
+ADX powyżej progu. Parametry: `rynek` = forex, `prog_adx` = 30, `ile` = 20.
+Kolumny: close, change, ADX, ADX+DI, ADX-DI, RSI.
+
+```json
+{"rynek": "forex", "prog_adx": 30}
+```
+```
+[ {"symbol": "...", "close": ..., "change": ..., "ADX": ..., "ADX+DI": ..., "ADX-DI": ..., "RSI": ...} ]
+```
+
+#### `vgm_skan_wolumen`
+Wolumen względny (do średniej z 10 dni) powyżej krotności. Parametry: `rynek` = forex, `krotnosc` = 2.0, `ile` = 20.
+Kolumny: close, change, volume, relative_volume_10d_calc, RSI.
+
+```json
+{"rynek": "crypto", "krotnosc": 3}
+```
+```
+[ {"symbol": "...", "close": ..., "change": ..., "volume": ..., "relative_volume_10d_calc": ..., "RSI": ...} ]
+```
+
+#### `vgm_skan`
+Dowolny filtr TradingView.
+Parametry: `rynek` (wym.), `warunki` (wym.) – lista obiektów
+`{"left": <pole>, "operation": <operacja>, "right": <wartość>}`,
+`pola` (= close, change, RSI, ADX, volume), `ile` = 30.
+Operacje podane w opisie narzędzia: `less`, `greater`, `equal`, `in_range`,
+`above_pct`, `below_pct`.
+
+```json
+{"rynek": "forex",
+ "warunki": [{"left": "RSI", "operation": "less", "right": 30},
+             {"left": "ADX", "operation": "greater", "right": 25}],
+ "pola": ["close", "RSI", "ADX"], "ile": 10}
+```
+```
+[ {"symbol": "...", "close": <liczba>, "RSI": <liczba>, "ADX": <liczba>}, ... ]
+```
+Wyniki są sortowane po zmianie ceny malejąco i obcięte do `ile`.
+
+### Pine Script (3)
+
+#### `vgm_pine_sprawdz`
+Kompiluje kod w kompilatorze TradingView. Odpowiedź w około sekundę.
+Parametry: `kod` (wym.).
+
+```json
+{"kod": "//@version=5\nindicator(\"test\")\nplot(ta.sma(clse, 20))"}
+```
+```
+{ "poprawny": false,
+  "bledy": [{"linia": <int>, "kolumna": <int>, "komunikat": "<tekst>"}],
+  "podglad": "   3 | plot(ta.sma(clse, 20))\n     |             ^-- ...",
+  "ostrzezenia": ["..."] }
+```
+Przy poprawnym kodzie: `{"poprawny": true, "bledy": []}` (`podglad` jest tylko przy błędach,
+`ostrzezenia` tylko gdy kompilator je zgłosił). Pusty kod daje błąd z `blad`.
+
+#### `vgm_pine_sprawdz_plik`
+To samo, ale kod czytany z pliku. Parametry: `sciezka` (wym.).
+
+```json
+{"sciezka": "/SCIEZKA/DO/skrypt.pine"}
+```
+```
+{ "poprawny": true, "bledy": [], "plik": "/SCIEZKA/DO/skrypt.pine" }
+```
+Brak pliku daje `{"blad": "nie ma takiego pliku: ...", "narzedzie": ...}`.
+
+#### `vgm_pine_szkielet`
+Gotowy szkielet wskaźnika Pine v5. Parametry: `nazwa` (= „Nowy wskaźnik"),
+`na_wykresie` = true (ustawia `overlay`).
+
+```json
+{"nazwa": "Moja srednia", "na_wykresie": true}
+```
+```
+{ "kod": "//@version=5\nindicator(\"Moja srednia\", overlay=true)\n..." }
+```
+
+### Wykres (15)
+
+Wymagają przeglądarki z CDP i otwartej karty TradingView. Wszystkie działają
+na **aktywnym** wykresie. Przed użyciem wywołaj `vgm_wykres_zdrowie`.
+
+#### `vgm_wykres_zdrowie`
+Czy da się sterować wykresem. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "port": <int>, "przegladarka": <bool>, "karta_tv": <bool>, "api_wykresu": <bool>,
+  "gotowy": <bool>, "tytul": "<tytuł karty>", "symbol": "<symbol>" }
+```
+Gdy się nie da, jest też `"powod": "<tekst>"`.
+
+#### `vgm_wykres_karta`
+Otwiera kartę z wykresem, jeśli żadna nie jest otwarta. Parametry: `symbol` = FX:EURUSD.
+
+```json
+{"symbol": "FX:EURUSD"}
+```
+```
+{ "bylo_gotowe": true, "symbol": "..." }
+```
+Gdy karty nie było: `{"bylo_gotowe": false, "otwarta": <bool>, "id": "<id>", "symbol": ..., "sekund": 20.0}`
+(przy niepowodzeniu zamiast `symbol` jest `powod`).
+
+#### `vgm_wykres_stan`
+Co jest na wykresie. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "symbol": "<symbol>", "interwal": "<przedział>", "typ_wykresu": <int>,
+  "wskazniki": [{"id": "<id>", "nazwa": "<nazwa>"}],
+  "rysunki": [{"id": "<id>", "nazwa": "<nazwa>"}] }
+```
+
+#### `vgm_wykres_wartosci`
+Bieżące wartości wskaźników z wykresu, także własnych (Pine). Bez parametrów.
+
+```json
+{}
+```
+```
+[ {"nazwa": "<opis wskaźnika>", "wartosci": [<liczba>, ...]} ]
+```
+
+#### `vgm_wykres_symbol`
+Zmienia instrument. Parametry: `symbol` (wym.).
+Uwaga: nie czeka na dane, zob. pułapkę poniżej; do czytania świec użyj `vgm_wykres_przelacz`.
+
+```json
+{"symbol": "NASDAQ:NVDA"}
+```
+```
+{ "ok": true, "symbol": "NASDAQ:NVDA" }
+```
+
+#### `vgm_wykres_interwal`
+Zmienia przedział. Parametry: `interwal` (wym.): 1, 5, 15, 60, 240, D, W, M.
+
+```json
+{"interwal": "60"}
+```
+```
+{ "ok": true, "interwal": "60" }
+```
+
+#### `vgm_wykres_typ`
+Typ wykresu. Parametry: `typ` (wym., liczba całkowita): 0 słupki, 1 świece, 3 linia, 9 Heikin Ashi.
+
+```json
+{"typ": 1}
+```
+```
+{ "ok": true, "typ": 1 }
+```
+
+#### `vgm_wykres_przelacz`
+Zmienia instrument i czeka, aż świece naprawdę do niego należą (porównuje cenę
+z publicznym punktem; gdy się nie zgadza, przeładowuje stronę).
+Parametry: `symbol` (wym.), `interwal`.
+
+```json
+{"symbol": "COINBASE:BTCUSD", "interwal": "60"}
+```
+```
+{ "symbol": "...", "interwal": "60", "sposob": "zmiana na miejscu",
+  "potwierdzone": <bool>, "cena_wykresu": <liczba>, "cena_odniesienia": <liczba>,
+  "przedzial_sprawdzony": <bool|null>, "odstep_swiec_s": <int|null> }
+```
+`sposob` to „zmiana na miejscu" albo „przeładowanie strony". Przy niepowodzeniu
+dochodzi `powod`.
+
+#### `vgm_wskaznik_dodaj`
+Dodaje wskaźnik po pełnej nazwie z okna wyboru TradingView
+(np. „Relative Strength Index", „Volume"). Parametry: `nazwa` (wym.).
+
+```json
+{"nazwa": "Relative Strength Index"}
+```
+```
+{ "ok": true, "dodano": "Relative Strength Index", "liczy": true }
+```
+Gdy wskaźnik jest na wykresie, ale nie zwraca wartości: `"liczy": false`,
+`"wskaznikow_liczacych": <int>` i `"uwaga": "<wyjaśnienie>"`.
+
+#### `vgm_wskaznik_usun`
+Usuwa wskaźnik po `id` z `vgm_wykres_stan`. Parametry: `id` (wym.).
+
+```json
+{"id": "<id z vgm_wykres_stan>"}
+```
+```
+{ "ok": true, "usuniete": "<id>" }
+```
+Nieznane `id` daje błąd „nie ma wskaźnika o takim identyfikatorze".
+
+#### `vgm_wykres_swiece`
+Świece historyczne z serii wczytanej na wykresie. Parametry: `ile` = 100
+(kod ogranicza do 1–5000).
+
+```json
+{"ile": 3}
+```
+```
+{ "dostepnych": <int>, "zwrocono": 3,
+  "swiece": [{"czas": <sekundy unix>, "otwarcie": <liczba>, "szczyt": <liczba>,
+              "dolek": <liczba>, "zamkniecie": <liczba>, "wolumen": <liczba|null>}] }
+```
+
+#### `vgm_wykres_zrzut`
+Zapisuje obraz wykresu do PNG. Parametry: `sciezka` (pominięta = plik tymczasowy),
+`zamknij_okna` = true (zamyka okna zachęt przed zrzutem).
+
+```json
+{"sciezka": "/tmp/wykres.png"}
+```
+```
+{ "plik": "/tmp/wykres.png", "bajtow": <int>, "tytul": "<tytuł karty>" }
+```
+
+#### `vgm_swiece_statystyka`
+Liczby policzone na świecach z wykresu. Parametry: `ile` = 200.
+
+```json
+{"ile": 200}
+```
+```
+{ "swiec": <int>, "od": <czas>, "do": <czas>,
+  "najwyzsze_zamkniecie": ..., "najnizsze_zamkniecie": ..., "ostatnie_zamkniecie": ...,
+  "w_zakresie_proc": <liczba|null>, "sredni_zasieg": ..., "najwiekszy_zasieg": ...,
+  "swiec_wzrostowych": <int>, "udzial_wzrostowych_proc": ...,
+  "najwieksza_luka": ..., "zmiana_od_poczatku_proc": ... }
+```
+Wymaga co najmniej 2 świec.
+
+#### `vgm_swiece_zmiennosc`
+Zmienność w dwóch oknach (świeższym i wcześniejszym) i ich stosunek.
+Parametry: `ile` = 200, `okno` = 20 (potrzeba co najmniej `2 * okno` świec).
+
+```json
+{"ile": 200, "okno": 20}
+```
+```
+{ "okno": 20,
+  "swiezsze":     {"sredni_zasieg": ..., "sredni_zasieg_proc_ceny": ..., "zakres": ...},
+  "wczesniejsze": {"sredni_zasieg": ..., "sredni_zasieg_proc_ceny": ..., "zakres": ...},
+  "stosunek_zasiegow": <liczba|null> }
+```
+
+#### `vgm_swiece_przedzialy`
+Statystyka świec z kilku przedziałów. Przełącza wykres na każdy przedział
+i wraca na wyjściowy. Parametry: `przedzialy` (= 15, 60, 240), `ile` = 100.
+
+```json
+{"przedzialy": ["15", "60"], "ile": 100}
+```
+```
+{ "przedzial_wyjsciowy": "<przedział>",
+  "wyniki": {"15": <jak w vgm_swiece_statystyka lub {"blad": "..."}>, "60": {...}} }
+```
+
+### Pomiar sygnałów (10)
+
+Narzędzia tej grupy liczą na świecach wczytanych na **aktywnym wykresie**
+(nie przyjmują symbolu – najpierw ustaw instrument przez `vgm_wykres_przelacz`).
+Sygnał jest porównywany z losowymi wejściami (placebo, 50 losowań, ziarno 42),
+sprawdzany osobno w obu połowach okresu i obciążany spreadem. W większości
+narzędzi wejście następuje na otwarciu świecy po sygnale (`vgm_koszt_a_przewaga`
+liczy od zamknięcia świecy sygnału). Wynik zawsze zawiera zdanie `wniosek`
+(lub `ocena`), także gdy sygnał nic nie wart.
+
+Wspólne parametry: `prog`, `kierunek` (`ponizej` / `powyzej`), `po_ilu` – ile świec
+po wejściu mierzymy zwrot, `spread_proc` – koszt w procentach ceny.
+
+Blok `caly_okres`, `pierwsza_polowa`, `druga_polowa` to statystyka wejść:
+`{"wejsc", "sredni_zwrot_proc", "mediana_proc", "trafien_proc", "najlepsze",
+"najgorsze", "odchylenie"}`; dla połów dochodzą `placebo`, `przewaga`, `z`.
+Gdy warunek nigdy nie wystąpił, narzędzia zwracają `{"wejsc": 0, "uwaga": "..."}`.
+
+#### `vgm_zmierz_prog`
+Czy przekroczenie progu przez **RSI (14)** cokolwiek zapowiada.
+Parametry: `prog` = 30, `kierunek` = ponizej, `po_ilu` = 10,
+`ile_swiec` = 0 (0 = cała wczytana historia), `spread_proc` = 0.02.
+Wymaga co najmniej 60 świec.
+
+```json
+{"prog": 30, "kierunek": "ponizej", "po_ilu": 10}
+```
+```
+{ "warunek": "RSI ponizej 30", "swiec": <int>, "sprawdzane_po": "10 świecach",
+  "spread_odjety_proc": 0.02,
+  "caly_okres": {...}, "pierwsza_polowa": {...}, "druga_polowa": {...},
+  "placebo_sredni_zwrot": <liczba|null>, "placebo_odchylenie": <liczba|null>,
+  "placebo_blokowe": <bool>, "przewaga_nad_placebo": <liczba|null>,
+  "z_score": <liczba|null>, "percentyl_wobec_placebo": <liczba|null>,
+  "losowan": <int>, "wniosek": "<zdanie>" }
+```
+
+#### `vgm_zmierz`
+To samo dla jednego z czterech wskaźników: `RSI`, `Bollinger` (0 = dolna wstęga,
+100 = górna), `ADX`, `ATR_proc`.
+Parametry: `wskaznik` = RSI, `prog` = 30, `kierunek` = ponizej, `po_ilu` = 10,
+`spread_proc` = 0.02. Zawsze używa całej wczytanej historii.
+
+```json
+{"wskaznik": "Bollinger", "prog": 90, "kierunek": "powyzej"}
+```
+```
+{ "warunek": "Bollinger powyzej 90", "opis_wskaznika": "<opis>",
+  "sygnalow_lacznie": <int>, "epizodow_bez_nakladania": <int>,
+  <dalej jak w vgm_zmierz_prog, od "swiec"> }
+```
+
+#### `vgm_porownaj_progi`
+Pomiar RSI na kilku progach naraz.
+Parametry: `progi` (= 25, 30, 35, 40), `kierunek` = ponizej, `po_ilu` = 10,
+`spread_proc` = 0.02.
+
+```json
+{"progi": [25, 30], "kierunek": "ponizej"}
+```
+```
+{ "kierunek": "ponizej", "sprawdzane_po": "10 świecach",
+  "progi": [{"prog": 25, "wejsc": <int>, "sredni_zwrot_proc": ..., "trafien_proc": ...,
+             "przewaga_nad_placebo": ..., "polowy_zgodne": <bool>, "dosc_wejsc": <bool>}],
+  "przechodzi_wszystkie_warunki": [<progi>], "wniosek": "<zdanie>" }
+```
+Wiersz z błędem ma postać `{"prog": ..., "blad": "..."}`.
+
+#### `vgm_przeglad_wskaznikow`
+Siedem ustalonych warunków (RSI <30 i >70, Bollinger <10 i >90, ADX >30 i <15,
+ATR_proc >0.15) w jednym przebiegu. Parametry: `po_ilu` = 10, `spread_proc` = 0.02.
+
+```json
+{"po_ilu": 10}
+```
+```
+{ "sprawdzono": 7,
+  "wyniki": [{"warunek": "RSI ponizej 30", "wejsc": <int>, "zwrot_proc": ...,
+              "trafien_proc": ..., "przewaga": ..., "wniosek": "<skrócone zdanie>"}],
+  "przeszly": ["<warunek>", ...], "wniosek": "<zdanie>" }
+```
+
+#### `vgm_przeglad_instrumentow`
+Ten sam przegląd na kilku instrumentach i przedziałach; przełącza wykres
+z weryfikacją danych i przywraca stan wyjściowy.
+Parametry: `instrumenty` – lista par `[symbol, przedział]`
+(pominięta = EURUSD 60, EURUSD D, COMEX:GC1! 60, COINBASE:BTCUSD 60), `po_ilu` = 10.
+
+```json
+{"instrumenty": [["FX:EURUSD", "60"], ["FX:GBPUSD", "60"]], "po_ilu": 10}
+```
+```
+{ "instrumentow": 2, "stan_przywrocony": "<symbol> <przedział>",
+  "wyniki": {"FX:EURUSD 60": {"sprawdzono": 7, "przeszly": [...],
+                              "najlepszy": {"warunek", "zwrot_proc", "wejsc", "trafien_proc"}}},
+  "warunki_ktore_przeszly_gdziekolwiek": [...], "wniosek": "<zdanie>" }
+```
+Pozycja, której dane nie zostały potwierdzone, ma postać
+`{"pominiete": "...", "szczegol": "..."}`. Trwa długo: każde przełączenie to kilka sekund.
+
+#### `vgm_sygnal_czy_trend`
+Czy warunek coś wnosi, czy tylko łapie trend: porównuje warunek, jego odwrotność,
+samo trzymanie i losowe wejście.
+Parametry: `wskaznik` = Bollinger, `prog` = 90, `kierunek` = powyzej, `po_ilu` = 10.
+
+```json
+{"wskaznik": "Bollinger", "prog": 90, "kierunek": "powyzej", "po_ilu": 10}
+```
+```
+{ "warunek": "Bollinger powyzej 90", "warunek_odwrotny": "Bollinger ponizej 10",
+  "zwrot_warunku_proc": ..., "zwrot_odwrotnego_proc": ..., "zwrot_trzymania_proc": ...,
+  "zwrot_losowego_proc": ..., "nad_trzymaniem_pp": ..., "rozstep_warunek_odwrotny_pp": ...,
+  "wejsc_warunku": <int>, "ocena": "<zdanie>" }
+```
+
+#### `vgm_odniesienie_trzymanie`
+Ile daje samo trzymanie przez `po_ilu` świec, bez sygnału. Parametry: `po_ilu` = 10.
+
+```json
+{"po_ilu": 10}
+```
+```
+{ "wejsc": <int>, "sredni_zwrot_proc": ..., "mediana_proc": ..., "trafien_proc": ...,
+  "najlepsze": ..., "najgorsze": ..., "odchylenie": ... }
+```
+
+#### `vgm_jak_dlugo_trzymac`
+Po ilu świecach sygnał daje najwięcej ponad samo trzymanie.
+Parametry: `wskaznik` = Bollinger, `prog` = 90, `kierunek` = powyzej,
+`dlugosci` (= 3, 5, 10, 20, 40).
+
+```json
+{"wskaznik": "Bollinger", "dlugosci": [5, 20]}
+```
+```
+{ "warunek": "Bollinger powyzej 90",
+  "dlugosci": [{"po_swiecach": 5, "zwrot_warunku_proc": ..., "zwrot_odwrotnego_proc": ...,
+                "zwrot_trzymania_proc": ..., "nad_trzymaniem_pp": ..., "rozstep_pp": ...,
+                "wejsc": <int>, "dziala": <bool>}],
+  "dziala_od": <int|null>, "najlepsza_dlugosc": <int|null>,
+  "wniosek": "<zdanie>", "uwaga": "<tekst>" }
+```
+
+#### `vgm_koszt_a_przewaga`
+Przy jakim koszcie transakcji sygnał przestaje mieć sens (transakcje bez nakładania).
+Parametry: `wskaznik` = Bollinger, `prog` = 90, `kierunek` = powyzej,
+`po_ilu` = 40, `koszty` (= 0.02, 0.05, 0.1, 0.2, 0.5, 1.0; w procentach na transakcję).
+
+```json
+{"wskaznik": "Bollinger", "po_ilu": 40, "koszty": [0.05, 0.2]}
+```
+```
+{ "warunek": "...", "po_swiecach": 40, "transakcji_sygnalu": <int>,
+  "wejsc_pominietych_bo_pozycja_otwarta": <int>, "transakcji_trzymania": 1,
+  "trzymanie_bez_kosztu_proc": ...,
+  "warianty": [{"koszt_proc": 0.05, "sygnal_suma_proc": ..., "sygnal_srednio_proc": ...,
+                "trzymanie_proc": ..., "sygnal_lepszy": <bool>}],
+  "dziala_do_kosztu_proc": <liczba|null>, "wniosek": "<zdanie>" }
+```
+
+#### `vgm_walk_forward`
+Jedyny pomiar poza próbą: próg wybierany na pierwszych 70% świec (najwyższy z-score
+wobec placebo), sprawdzany na ostatnich 30%. Wymaga co najmniej 200 świec.
+Parametry: `wskaznik` (wym.: RSI, Bollinger, ADX, ATR_proc), `kierunek`,
+`progi` (pominięte = pięć progów z percentyli wskaźnika na części uczącej),
+`po_ilu` = 10, `czesc_ucz` = 0.7, `spread_proc` = 0.0.
+
+```json
+{"wskaznik": "RSI", "kierunek": "ponizej", "po_ilu": 10}
+```
+```
+{ "wskaznik": "RSI", "kierunek": "ponizej", "po_ilu": 10,
+  "swiec": <int>, "granica": <int>, "czesc_ucz": 0.7,
+  "uczenie": [{"prog": ..., "wejsc": <int>, "zwrot": ..., "przewaga": ..., "z": ...}],
+  "wybrany_prog": <liczba>,
+  "test": {"prog": ..., "wejsc": <int>, "zwrot": ..., "przewaga": ..., "z": ...},
+  "wniosek": "<zdanie>" }
+```
+Gdy żaden próg nie dał ośmiu wejść na uczeniu, odpowiedź nie ma `wybrany_prog` ani `test`,
+a `wniosek` to mówi.
+
+### Sesja (9)
+
+Wymagają zalogowanego konta TradingView w przeglądarce z CDP. Bez sesji zwracają
+`{"blad": "...", "narzedzie": "...", "podpowiedz": "zaloguj się na TradingView w przeglądarce z CDP"}`.
+Alerty i skrypty idą zwykłym HTTP z ciasteczkami z przeglądarki.
+
+#### `vgm_sesja`
+Czy jest sesja i jaki plan. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "zalogowany": <bool>, "sessionid": <bool>,
+  "uzytkownik": "abc***", "plan": "<plan|null>" }
+```
+Nazwa użytkownika jest skrócona do trzech znaków i `***`.
+
+#### `vgm_alerty`
+Wszystkie alerty cenowe z konta. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "ile": <int>,
+  "alerty": [{"id": ..., "symbol": "<symbol>", "nazwa": "<do 60 znaków>",
+              "aktywny": <bool>, "warunek": ..., "interwal": ...}] }
+```
+
+#### `vgm_lista_obserwowanych`
+Instrumenty z listy obserwowanych otwartej w prawym panelu wykresu. Bez parametrów.
+Panel musi być otwarty.
+
+```json
+{}
+```
+```
+{ "nazwa": "<nazwa listy|null>", "ile": <int>, "symbole": ["<symbol>", ...] }
+```
+
+#### `vgm_skrypty_pine`
+Skrypty Pine zapisane na koncie. Bez parametrów.
+
+```json
+{}
+```
+```
+{ "ile": <int>,
+  "skrypty": [{"nazwa": "<do 60 znaków>", "id": "<scriptIdPart>", "wersja": ..., "zmieniony": ...}] }
+```
+
+#### `vgm_zrodlo_pine`
+Kod zapisanego skryptu. Parametry: `id` (wym.) – z `vgm_skrypty_pine`.
+
+```json
+{"id": "<id z vgm_skrypty_pine>"}
+```
+```
+{ "nazwa": "<nazwa>", "kod": "<źródło>", "wersja": ... }
+```
+
+#### `vgm_zapisz_pine`
+Zapisuje **nowy** skrypt na koncie (zmienia stan konta). Przed zapisem sprawdź kod
+przez `vgm_pine_sprawdz`. Parametry: `kod` (wym.), `nazwa` (wym.).
+
+```json
+{"kod": "//@version=5\nindicator(\"test\")\nplot(close)", "nazwa": "test"}
+```
+```
+{ "zapisany": <bool>, "id": "<scriptIdPart|null>", "zapisanych_teraz": <int> }
+```
+
+#### `vgm_usun_pine`
+Usuwa zapisany skrypt. **Nieodwracalne.** Parametry: `id` (wym.).
+
+```json
+{"id": "<id z vgm_skrypty_pine>"}
+```
+```
+{ "usuniety": <bool>, "zapisanych_teraz": <int> }
+```
+
+#### `vgm_strategie_wbudowane`
+Wbudowane skrypty TradingView, z których wybiera te o nazwie zawierającej „strateg".
+Bez parametrów.
+
+```json
+{}
+```
+```
+{ "wbudowanych": <int>, "strategii": <int>,
+  "strategie": [{"nazwa": "<nazwa>", "id": "<id>"}] }
+```
+
+#### `vgm_tester_raport`
+Otwiera Strategy Tester i czyta tekst raportu. Bez parametrów.
+Na wykresie musi być własna strategia.
+
+```json
+{}
+```
+```
+{ "otwarty": <bool>, "strategie_na_wykresie": ["<nazwa>"],
+  "linie": ["<linia panelu>", ...],   // do 60 linii
+  "ma_transakcje": <bool> }
+```
+
+### Odtwarzanie historii (5)
+
+Wymaga karty TradingView z dostępnym trybem Replay. Wykres cofa się do daty
+i idzie świeca po świecy. Po skończeniu **zawsze** wywołaj `vgm_replay_stop`,
+bo inaczej wykres zostaje cofnięty w przeszłość.
+
+Wszystkie narzędzia z tej grupy zwracają ten sam stan:
+
+```
+{ "dostepne": <bool>, "trwa": <bool>, "autoodtwarzanie": <bool>, "gotowe_do_gry": <bool>,
+  "pasek_widoczny": <bool>, "opoznienie": <int|null>, "tryb": "<tekst>",
+  "historia_od": "<RRRR-MM-DD|null>", "wybrana_data": "<RRRR-MM-DD GG:MM|null>",
+  "pozycja": <obiekt|null>, "wynik": ..., "waluta": ...,
+  "stoi_na": "<RRRR-MM-DD GG:MM>", "ostatnie_zamkniecie": <liczba> }
+```
+
+`stoi_na` i `ostatnie_zamkniecie` są tylko wtedy, gdy odtwarzanie trwa. Gdy wykres
+nie ma jeszcze świec, jest `"stoi_na": null` i `uwaga_swiece`.
+
+#### `vgm_replay_stan`
+Stan odtwarzania. Bez parametrów. Sprawdź przed innymi narzędziami tej grupy.
+
+```json
+{}
+```
+Odpowiedź: stan jak wyżej.
+
+#### `vgm_replay_start`
+Cofa wykres do daty i włącza odtwarzanie. Parametry: `data` – `YYYY-MM-DD`,
+`YYYY-MM-DD HH:MM` albo liczba sekund; pominięta = początek historii instrumentu.
+
+```json
+{"data": "2026-09-11 13:30"}
+```
+Odpowiedź: stan jak wyżej plus `"uwaga": "wykres jest w trybie odtwarzania — wyjście przez vgm_replay_stop"`.
+Gdy odtwarzanie nie jest dostępne albo nie wystartuje w 20 s, zwraca błąd.
+
+#### `vgm_replay_krok`
+Przesuwa o `ile` świec (1–500, kod ucina wartości spoza zakresu). Parametry: `ile` = 1.
+
+```json
+{"ile": 4}
+```
+Odpowiedź: stan jak wyżej plus `"krokow": 4` i `"ruszyl": <bool>` (czy ostatnia świeca
+się zmieniła). Bez trwającego odtwarzania zwraca błąd.
+
+#### `vgm_replay_autoplay`
+Włącza lub wyłącza samoczynne przesuwanie. Parametry: `wlacz` = true,
+`opoznienie_ms` – opóźnienie na świecę w milisekundach (np. 100, 300, 1000).
+
+```json
+{"wlacz": true, "opoznienie_ms": 300}
+```
+Odpowiedź: stan jak wyżej.
+
+#### `vgm_replay_stop`
+Kończy odtwarzanie i wraca do czasu rzeczywistego. Bez parametrów.
+
+```json
+{}
+```
+Odpowiedź: stan jak wyżej plus `"uwaga"` („wykres wrócił do czasu rzeczywistego"
+albo „odtwarzanie już nie trwało").
+
+### Układ okna (4)
+
+Kilka wykresów obok siebie. Pozostałe narzędzia wykresu działają na wykresie
+aktywnym, a `vgm_uklad_wybierz` zmienia, który jest aktywny.
+
+Wspólne pola stanu układu:
+
+```
+{ "uklad": "<kod>", "nazwa": "<nazwa układu>", "wykresow": <int>, "aktywny": <int>,
+  "paneli_w_wykresie": <int|null>, "niezapisane_zmiany": <bool|null>,
+  "uklad_opis": "<opis kodu>",
+  "wykresy": [{"indeks": 0, "symbol": "...", "interwal": "..."}]   // gdy wykresów > 1
+}
+```
+
+#### `vgm_uklad_stan`
+Układ okna i to, co stoi na każdym wykresie. Bez parametrów. Przy kilku wykresach
+chwilowo przełącza aktywny wykres i wraca na ten, który był.
+
+```json
+{}
+```
+Odpowiedź: pola stanu jak wyżej.
+
+#### `vgm_uklad_ustaw`
+Dzieli okno według kodu: `s` (jeden), `2h`, `2v`, `2-1`, `3h`, `3v`, `4`, `6`, `8`.
+Parametry: `kod` = s. **Zmienia to, co widzisz** – wróć kodem `s`.
+
+```json
+{"kod": "2h"}
+```
+Odpowiedź: pola stanu plus `"zgodny": <bool>` i `"uwaga"`. Nieznany kod daje błąd
+z listą dostępnych.
+
+#### `vgm_uklad_wybierz`
+Wybiera aktywny wykres (licząc od zera). Parametry: `indeks` = 0.
+
+```json
+{"indeks": 1}
+```
+Odpowiedź: pola stanu plus `"zgodny": <bool>`. Indeks poza zakresem daje błąd.
+
+#### `vgm_uklad_symbol`
+Ustawia instrument na wybranym wykresie układu. Po wywołaniu aktywny zostaje ten wykres.
+Parametry: `indeks` (wym.), `symbol` (wym.), `interwal` (pominięty = bez zmiany).
+
+```json
+{"indeks": 1, "symbol": "FX:GBPUSD", "interwal": "60"}
+```
+```
+{ "indeks": 1, "symbol": "<symbol>", "interwal": "<przedział>",
+  "zgodny": <bool>, "uklad": { <pola stanu układu> } }
+```
+
+---
+
+## Testy
+
+Testy z katalogu `tests/` działają **bez sieci, bez przeglądarki i bez konta**:
+pakiet `mcp` jest w nich podmieniany atrapą, a każda próba otwarcia połączenia
+kończy test błędem.
 
 ```bash
-python3 test_vgm.py      # sprawdza wszystko: pola, rynki, Pine, wykres
-python3 src/dane.py      # warstwa danych
-python3 src/analiza.py   # warstwa analizy
-python3 src/pola.py      # sprawdza, czy wszystkie 91 pól nadal działają
+pip install -r requirements-dev.txt   # pytest, mcp, websocket-client
+python3 -m pytest                      # konfiguracja w pytest.ini: testpaths = tests
 ```
 
-Ostatnie polecenie warto puścić, kiedy coś zacznie zwracać puste wartości. Powie,
-która grupa pól przestała odpowiadać.
-
----
-
-## Przykłady
-
-```python
-from src import analiza
-
-analiza.polozenie("FX:EURUSD")
-# cena 1.16211
-# w kanale Bollingera: 56.7%
-# w rozpiętości rocznej: 39.1%
-# nad EMA200: +0.47%
-# szerokość kanału: 1.79% ceny
-# ATR: 0.395% ceny
-
-analiza.zgodnosc_pelna("FX:EURUSD")
-# RSI       1min 54.4 | 5min 51.8 | 15min 45.3 | 60min 51.3
-# ADX       1min 29.3 | 5min 23.6 | 15min 21.7 | 60min 26.3
-# MACD.hist 1min -0.0 | 5min  0.0 | 15min -0.0 | 60min -0.0
-
-analiza.skan_silny_trend("forex", prog_adx=30)
-# instrumenty z ADX ponad 30, z kierunkiem
-```
-
-
-## Rynki
-
-Sprawdzone, wszystkie zwracają wyniki:
-
-| nazwa | co obejmuje |
-|---|---|
-| `forex` | pary walutowe |
-| `crypto`, `coin` | kryptowaluty, dwa różne zestawy |
-| `america` | akcje amerykańskie |
-| `poland` | GPW i NewConnect |
-| `germany`, `uk`, `japan` | akcje z tych giełd |
-| `futures` | kontrakty terminowe |
-| `cfd` | kontrakty na różnicę |
-
-Wszystkie 91 pól działa na każdym z tych rynków. Sprawdzone na kryptowalutach,
-akcjach amerykańskich, GPW i kontraktach na złoto: za każdym razem 91 z 91.
-
----
-
-## Z terminala
-
-Te same narzędzia bez klienta MCP:
+Osobno są sprawdzenia, które **łączą się z żywym TradingView** (potrzebują internetu,
+a część także przeglądarki):
 
 ```bash
-vgm odczyt FX:EURUSD              cena i wskaźniki
-vgm obraz FX:EURUSD               wszystkie 91 pól
-vgm polozenie FX:EURUSD           miejsce ceny względem odniesień
-vgm mtf FX:EURUSD                 wskaźnik na kilku przedziałach
-vgm zgodnosc FX:EURUSD            ile przedziałów mówi to samo
-vgm porownaj FX:EURUSD FX:GBPUSD  instrumenty obok siebie
-vgm skan trend                    przegląd rynku
-vgm pine moj-wskaznik.pine        sprawdzenie kodu
-vgm wykres stan                   co jest na wykresie
-vgm wykres zrzut obraz.png        zapis wykresu
-vgm swiece 200 --statystyka       liczby ze świec
-vgm wszystko FX:EURUSD            pełny obraz jednym poleceniem
+python3 test_vgm.py      # pola, rynki, Pine, warstwa wykresu (pomija ją, gdy brak przeglądarki)
+python3 src/pola.py      # odpytuje wszystkie 91 pól i mówi, które przestały działać
+python3 src/dane.py      # krótki pokaz warstwy danych
+python3 src/analiza.py   # krótki pokaz warstwy analizy
 ```
 
-Każde polecenie przyjmuje `--json`, gdy wynik ma iść dalej do skryptu.
+`src/pola.py` warto uruchomić, gdy któreś narzędzie zacznie zwracać puste wartości.
 
 ---
 
-## Czego brakuje
+## Znane ograniczenia
 
-| brakuje | powód, zmierzony |
-|---|---|
-| wstawianie własnego kodu do edytora Pine | Monaco w oknie aplikacji nie przyjmuje wejścia z CDP; `insertText`, zdarzenia klawiszy i `execCommand` sprawdzone, żadne nie działa bezpiecznie |
-| zapis układu na konto | `saveChartAs` istnieje, ale w tym samym API nie ma kasowania — każdy test zostawiłby śmieć na koncie, a bez testu na żywo nic tu nie wchodzi |
-| pozycje papierowe w odtwarzaniu | `buy(1)` zwraca `undefined`, `position()` zostaje pusta także przy otwartym panelu Replay Trading |
-| wbudowane strategie w testerze | `createStudy` nie dodaje ich pod żadną z trzech nazw; tester czyta raport tylko własnej strategii |
-| rysowanie na wykresie | wywołanie przechodzi, nic się nie pojawia |
-| karty przeglądarki | TradingView nie wystawia API kart; `vgm_wykres_karta` otwiera nową kartę przez samą przeglądarkę |
+**Dane**
+- Dane pochodzą z publicznego punktu `scanner.tradingview.com` i są liczone po stronie
+  TradingView. To nie są kwotowania brokera – do handlu użyj ceny od swojego brokera.
+- Odstęp między zapytaniami to 1,2 s (dla kompilatora Pine 1,0 s). Przy odpowiedzi
+  403 lub 429 narzędzie zatrzymuje się i **nie ponawia** (ponawianie grozi blokadą adresu).
+- Przedziały czasu sprawdzone dla danych publicznych: 1, 5, 15, 60, 240, 1W.
+  Dla przedziału dziennego pole bywa puste – wtedy wartość to `null`.
+- `vgm_wiele` (a przez nią `vgm_porownaj`) wysyła zapytanie zawsze do `/forex/scan`.
+  Kod nie sprawdza, czy zwraca to poprawne dane dla instrumentów z innych rynków.
+- `vgm_zgodnosc` liczy zgodność tylko na RSI i niczego nie rekomenduje; progi są
+  Twoim parametrem.
 
-Obejście dla pierwszego: zapisz skrypt na konto przez `vgm_zapisz_pine`, otwórz go
-w edytorze ręcznie i dodaj na wykres przyciskiem.
----|---|
-| wstawianie własnego kodu do edytora Pine | Monaco w oknie aplikacji nie przyjmuje wejścia z CDP; `insertText`, zdarzenia klawiszy i `execCommand` sprawdzone, żadne nie działa bezpiecznie |
-| wbudowane strategie w testerze | `createStudy` nie dodaje ich pod żadną z trzech nazw; tester czyta raport tylko własnej strategii |
-| rysowanie na wykresie | wywołanie przechodzi, nic się nie pojawia |
-| `compileScript` z API strony | zwraca błąd serwera przy każdym zestawie argumentów; kompilacja działa osobną drogą przez `vgm_pine_sprawdz` |
+**Wykres i sesja**
+- Warstwa wykresu korzysta z nieudokumentowanego, wewnętrznego API strony TradingView
+  (`window.TradingViewApi`). Może przestać działać po aktualizacji strony.
+- Bez zalogowanego konta TradingView liczy tylko jeden wskaźnik naraz. Kolejne dodane
+  wskaźniki są na liście, ale ich wartości zostają puste; `vgm_wskaznik_dodaj` zgłasza
+  to w polu `liczy`.
+- `vgm_wykres_symbol` i `vgm_wykres_interwal` zmieniają nazwę od razu, ale świece mogą
+  jeszcze należeć do poprzedniego instrumentu lub przedziału, a nic tego nie sygnalizuje.
+  Przed czytaniem świec i pomiarem używaj `vgm_wykres_przelacz`, który sprawdza
+  cenę i odstęp między świecami.
+- Wszystkie narzędzia wykresu i pomiaru działają na wykresie aktywnym; w układzie
+  wielookiennym najpierw wybierz go przez `vgm_uklad_wybierz`.
+- Świeże przełączenie symbolu wczytuje zwykle kilkaset świec (w kodzie podano
+  ok. 400). Pełniejsza historia pojawia się tylko w szczególnych przypadkach
+  opisanych w `src/pomiar.py` (strategia z głębokim testem na wykresie).
+- `vgm_replay_start` i `vgm_uklad_ustaw` zmieniają to, co widzisz w przeglądarce;
+  sprzątają dopiero `vgm_replay_stop` i `vgm_uklad_ustaw` z kodem `s`.
+- `vgm_lista_obserwowanych` czyta stronę, więc wymaga otwartego prawego panelu.
+- `vgm_tester_raport` czyta tylko strategię własną; wbudowanych strategii nie da się
+  dodać na wykres przez `createStudy`. Wyniki testera są poglądowe.
+- `vgm_zapisz_pine` i `vgm_usun_pine` zmieniają konto; usunięcie jest nieodwracalne.
 
-Obejście dla pierwszego: zapisz skrypt na konto przez `vgm_zapisz_pine`, otwórz go
-w edytorze ręcznie i dodaj na wykres przyciskiem.
----|---|
-| wstawianie Pine na wykres | wymaga zalogowanego edytora |
-| alerty | wymagają konta |
-| rysowanie na wykresie | sprawdzone: wywołanie przechodzi, ale nic się nie pojawia bez sesji |
-| Strategy Tester | wyniki są i tak tylko poglądowe, więc niski priorytet |
+**Pomiar sygnałów**
+- `vgm_zmierz_prog` i `vgm_porownaj_progi` mierzą wyłącznie RSI(14); pozostałe wskaźniki
+  (Bollinger, ADX, ATR_proc) obsługują `vgm_zmierz`, `vgm_walk_forward`,
+  `vgm_sygnal_czy_trend`, `vgm_jak_dlugo_trzymac` i `vgm_koszt_a_przewaga`.
+- Minimum świec: 60 (większość pomiarów), 200 (`vgm_walk_forward`); `vgm_swiece_zmiennosc` wymaga `2 * okno`.
+- Wynik z mniej niż 20 wejściami jest uznawany za niewystarczający do jakiegokolwiek
+  wniosku. Liczba losowań placebo (50) i ziarno (42) są wpisane w kodzie.
+- Pomiar nie jest poradą inwestycyjną: mówi, czy dany warunek wyglądał na przewagę
+  na wczytanych świecach, a nie czy zadziała w przyszłości.
+- Schemat `vgm_walk_forward` nie deklaruje parametru `ile_swiec`, choć kod go odczytuje.
+  `vgm_zmierz` i inne narzędzia pomiaru zawsze używają całej wczytanej historii.
 
-Warstwa wykresu działa bez logowania, gdy chodzi o odczyt i sterowanie. Zapisywanie
-skryptów, alerty i listy obserwowanych wymagają zalogowanej sesji.
-
-Te rzeczy są zaplanowane, ale żadnej nie ma w kodzie. Nie chcę, żeby ktoś liczył
-na coś, czego nie zbudowałem.
-
----
-
-## Ograniczenia
-
-🔴 **Pułapka, na którą trzeba uważać.** Zmiana instrumentu przez
-`vgm_wykres_symbol` zmienia nazwę natychmiast, ale seria świec potrafi
-zostać przy poprzednim instrumencie. Wykres pokazuje wtedy jedną nazwę,
-a zwraca ceny innego waloru, przy czym nic tego nie sygnalizuje.
-
-Zmierzone: po przełączeniu na bitcoina wykres deklarował `COINBASE:BTCUSD`,
-a ostatnia świeca miała 1,35206, czyli cenę funta. Statystyka policzona na
-takich danych jest bezwartościowa i wygląda dokładnie tak samo jak prawdziwa.
-
-Dlatego przed czytaniem świec używaj `vgm_wykres_przelacz`. Sprawdza
-on cenę krzyżowo z publicznym punktem TradingView i, gdy trzeba, przeładowuje
-stronę z symbolem wpisanym w adres.
-
-🔴 **Druga pułapka, tego samego rodzaju.** Zmiana przedziału czasu przez
-`vgm_wykres_interwal` też zmienia samą nazwę. Zmierzone: wykres pokazywał
-"1D", a odstęp między świecami wynosił godzinę. Cztery różne przedziały dawały
-wtedy identyczne wyniki pomiaru.
-
-`vgm_wykres_przelacz` sprawdza więc dwie rzeczy naraz: czy cena zgadza się
-z publicznym punktem i czy **odstęp między świecami odpowiada przedziałowi**.
-Sama nazwa nie wystarcza w żadnym z tych dwóch przypadków.
-
-
-**To nie są ceny brokera.** Dane idą z publicznego punktu TradingView i są liczone
-po ich stronie. Twój broker pokaże inną cenę i inny spread. Do handlu bierz jego.
-
-**Przedział dzienny bywa pusty.** Tak zachowuje się TradingView. Narzędzie zwraca
-wtedy wartość pustą i wypisuje taki przedział osobno, w polu `bez_danych`.
-
-**`vgm_zgodnosc` nie mówi „kupuj".** Zwraca liczby: tyle przedziałów powyżej progu,
-tyle poniżej. Próg jest w parametrze, bo należy do strategii. Wpisanie go na sztywno
-sugerowałoby przewagę, której nikt nie zmierzył. To najdroższy rodzaj kłamstwa w handlu.
-
-**Odstęp między zapytaniami: 1,2 sekundy.** Wymuszony w kodzie. Przy odpowiedzi 403
-albo 429 serwer staje i nie ponawia. Ponawianie przy tych kodach kończy się blokadą adresu, o czym przekonaliśmy się
-na własnej skórze.
+**Czego w serwerze nie ma**
+- Wstawiania własnego kodu do edytora Pine (zapisz skrypt przez `vgm_zapisz_pine`
+  i dodaj go na wykres ręcznie).
+- Rysowania na wykresie, pozycji papierowych w odtwarzaniu, zapisu układu na konto.
 
 ---
 
 ## Licencja
 
-MIT. Rób, co chcesz.
+MIT – zob. plik `LICENSE`.
