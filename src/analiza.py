@@ -19,7 +19,7 @@ import pola  # noqa: E402
 
 
 def obraz(symbol: str, interwal: str | None = None) -> dict:
-    """Pełny obraz instrumentu — 62 pola pogrupowane tematycznie.
+    """Pełny obraz instrumentu — 91 pól pogrupowanych tematycznie.
 
     Jedno zapytanie zamiast dziewięciu. Z `interwal` bierze wszystko
     z podanego przedziału czasu (np. "60" = godzinowy).
@@ -251,6 +251,8 @@ def zmiennosc_swiec(ile: int = 200, okno: int = 20) -> dict:
     pomiarze: liczba z jednego okresu nic nie mówi, dopóki nie zobaczysz,
     czy powtarza się w drugim.
     """
+    if okno < 1:
+        raise dane.BladTV(f"okno musi być co najmniej 1, jest {okno}")
     s = _swiece_z_wykresu(ile)
     if len(s) < okno * 2:
         raise dane.BladTV(f"potrzeba co najmniej {okno * 2} świec, jest {len(s)}")
@@ -339,7 +341,7 @@ def obraz_pelny(symbol: str) -> dict:
 
 
 def _demo():
-    print("1. pełny obraz — 62 pola w dziewięciu grupach")
+    print("1. pełny obraz — 91 pól w dziewięciu grupach")
     o = obraz("FX:EURUSD")
     for g, w in o.items():
         if isinstance(w, dict):

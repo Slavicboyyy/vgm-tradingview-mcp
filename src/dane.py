@@ -165,7 +165,7 @@ def zgodnosc(symbol: str, interwaly: list[str] | None = None,
 
     kupno = [i for i, v in dane.items() if v is not None and v >= prog_kupno]
     sprzedaz = [i for i, v in dane.items() if v is not None and v <= prog_sprzedaz]
-    brak = [i for i, v in dane.items() if v is None]
+    brak = [i for i in interwaly if dane.get(i) is None]
 
     return {
         "symbol": symbol,
@@ -199,9 +199,9 @@ def _demo():
 
     print("\n5. zgodność interwałów — surowiec dla bramki")
     z = zgodnosc("FX:EURUSD")
-    print(f"   za kupnem:    {z[chr(39)+chr(122)+chr(97)+chr(95)+chr(107)+chr(117)+chr(112)+chr(110)+chr(101)+chr(109)+chr(39)] if False else z["za_kupnem"]}")
-    print(f"   za sprzedażą: {z["za_sprzedaza"]}")
-    print(f"   wszystkie zgodne: {z["wszystkie_zgodne"]}")
+    print(f"   za kupnem:    {z['za_kupnem']}")
+    print(f"   za sprzedażą: {z['za_sprzedaza']}")
+    print(f"   wszystkie zgodne: {z['wszystkie_zgodne']}")
 
     print("\n6. obsługa błędu — zła nazwa")
     try:
