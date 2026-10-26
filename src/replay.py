@@ -72,6 +72,8 @@ def _na_milisekundy(data) -> int:
     if isinstance(data, (int, float)):
         return int(data) * 1000
     t = str(data).strip()
+    if t.isdigit():             # przez MCP liczba sekund przychodzi jako tekst
+        return int(t) * 1000
     for wzor in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return int(datetime.strptime(t, wzor).replace(tzinfo=timezone.utc).timestamp()) * 1000

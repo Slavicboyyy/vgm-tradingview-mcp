@@ -73,6 +73,8 @@ def _losuj_probe(swiece, wejscia, od, do, rng, kw=None):
     świec, wraca do zwykłego losowania i mówi o tym drugą wartością.
     """
     pula = list(range(max(od, 25), max(od + 1, do)))
+    if not pula:
+        return [], False
     n = min(len(wejscia), max(1, len(pula) - 1))
     if kw:
         wg_kw, potrzeba = {}, {}
@@ -130,6 +132,11 @@ def _placebo_dla(swiece, wejscia, od, do, po_ilu, spread_proc, rng, losowan,
             "z": round(prz / od_, 2) if od_ else None, "placebo_blokowe": blokowo}
 
 
+def _sprawdz_kierunek(kierunek):
+    if kierunek not in ("ponizej", "powyzej"):
+        raise BladPomiaru(f"nieznany kierunek: {kierunek} — dostępne: ponizej, powyzej")
+
+
 def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
                 po_ilu: int = 10, ile_swiec: int = 0,
                 spread_proc: float = 0.02, losowan: int = 50, seed: int = 42) -> dict:
@@ -144,6 +151,7 @@ def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
     """
     import analiza
 
+    _sprawdz_kierunek(kierunek)
     swiece = analiza._swiece_z_wykresu(ile_swiec)
     if len(swiece) < 60:
         raise BladPomiaru(f"za mało świec: {len(swiece)}, potrzeba co najmniej 60")
@@ -454,6 +462,7 @@ def zmierz(wskaznik: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
     """
     import analiza
 
+    _sprawdz_kierunek(kierunek)
     swiece = analiza._swiece_z_wykresu(ile_swiec)
     if len(swiece) < 60:
         raise BladPomiaru(f"za mało świec: {len(swiece)}, potrzeba co najmniej 60")
@@ -678,7 +687,7 @@ def czy_sygnal_czy_trend(wskaznik: str = "Bollinger", prog: float = 90,
     wypada gorzej. Sam trend daje podobny wynik niezależnie od warunku.
     """
     odwrotny = "ponizej" if kierunek == "powyzej" else "powyzej"
-    prog_odwrotny = 100 - prog if wskaznik == "Bollinger" else prog
+    prog_odwrotny = 100 - prog if wskaznik in ("Bollinger", "RSI") else prog
 
     w = zmierz(wskaznik, prog, kierunek, po_ilu, ile_swiec, spread_proc)
     o = zmierz(wskaznik, prog_odwrotny, odwrotny, po_ilu, ile_swiec, spread_proc)

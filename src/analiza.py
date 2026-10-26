@@ -251,6 +251,8 @@ def zmiennosc_swiec(ile: int = 200, okno: int = 20) -> dict:
     pomiarze: liczba z jednego okresu nic nie mówi, dopóki nie zobaczysz,
     czy powtarza się w drugim.
     """
+    if okno < 1:
+        raise dane.BladTV(f"okno musi być co najmniej 1, jest {okno}")
     s = _swiece_z_wykresu(ile)
     if len(s) < okno * 2:
         raise dane.BladTV(f"potrzeba co najmniej {okno * 2} świec, jest {len(s)}")
