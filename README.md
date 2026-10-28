@@ -129,7 +129,7 @@ Alerty i skrypty idą zwykłym HTTP z tymi ciasteczkami, bez klikania w stronę.
 | `vgm_skrypty_pine` | skrypty Pine zapisane na koncie | 59 skryptów |
 | `vgm_zrodlo_pine` | kod zapisanego skryptu | 6316 znaków |
 | `vgm_zapisz_pine` | zapis nowego skryptu na konto | lista 59 → 60 → 59 po usunięciu |
-| `vgm_usun_pine` | usunięcie skryptu, nieodwracalne | testowy usunięty |
+| `vgm_usun_pine` | usunięcie skryptu, nieodwracalne; wymaga `potwierdz=true` | testowy usunięty |
 | `vgm_strategie_wbudowane` | wbudowane strategie z identyfikatorami | 20 ze 145 |
 | `vgm_tester_raport` | Strategy Tester: raport strategii z wykresu | panel otwarty, raport odczytany |
 
@@ -182,7 +182,7 @@ Bez przeglądarki i bez konta.
 | narzędzie | do czego | sprawdzone na |
 |---|---|---|
 | `vgm_pine_sprawdz` | kompilacja z dokładną linią i kolumną błędu | kod poprawny, jeden błąd, dwa błędy |
-| `vgm_pine_sprawdz_plik` | to samo, z pliku na dysku | tylko wywołanie |
+| `vgm_pine_sprawdz_plik` | to samo, z pliku `.pine`/`.txt` z katalogu `VGM_KATALOG_PINE` (domyślnie katalog roboczy) | tylko wywołanie |
 | `vgm_pine_szkielet` | gotowy punkt wyjścia, sam się kompiluje | kompiluje się bez błędu |
 
 Sprawdzenie trwa około sekundy i wygląda tak:
@@ -383,6 +383,18 @@ vgm wszystko FX:EURUSD            pełny obraz jednym poleceniem
 Każde polecenie przyjmuje `--json`, gdy wynik ma iść dalej do skryptu.
 
 ---
+
+## Bezpieczeństwo wejścia
+
+Argumenty narzędzi sprawdza `src/walidacja.py` zanim trafią do adresu, ścieżki albo kodu JS.
+Zmienne środowiskowe:
+
+- `VGM_KATALOG_PINE` — skąd wolno czytać pliki dla `vgm_pine_sprawdz_plik` (domyślnie katalog roboczy),
+- `VGM_KATALOG_ZRZUTOW` — gdzie wolno zapisywać `vgm_wykres_zrzut` (domyślnie `<tmp>/vgm-mcp`), tylko `*.png`,
+- `VGM_CDP_PORT` — port przeglądarki, 1–65535.
+
+Zapytania HTTP idą tylko do hostów TradingView, bez przekierowań, z limitem rozmiaru odpowiedzi.
+Jedno wywołanie narzędzia ma twardy limit 240 s. Testy (bez sieci): `pip install -r requirements-dev.txt && pytest`.
 
 ## Czego brakuje
 

@@ -20,6 +20,7 @@ a `stop` wraca do czasu rzeczywistego.
 """
 from __future__ import annotations
 
+import math
 import sys
 import time
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import walidacja as wal  # noqa: E402
 import wykres  # noqa: E402
 
 
@@ -69,9 +71,13 @@ def _na_milisekundy(data) -> int:
     sekund wrzuca wykres na pierwszą dostępną świecę w historii
     (zmierzone: EURUSD skakał na 2001-11-28 zamiast na podaną datę).
     """
+    if isinstance(data, bool):
+        raise BladReplay("nie rozumiem daty: wartość logiczna")
     if isinstance(data, (int, float)):
+        if not math.isfinite(data) or not 0 <= data <= 4_102_444_800:   # do roku 2100
+            raise BladReplay(f"data poza zakresem: {data}")
         return int(data) * 1000
-    t = str(data).strip()
+    t = str(data).strip()[:32]
     for wzor in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return int(datetime.strptime(t, wzor).replace(tzinfo=timezone.utc).timestamp()) * 1000
@@ -137,7 +143,10 @@ def krok(ile: int = 1) -> dict:
     """Przesuwa odtwarzanie o `ile` świec do przodu."""
     if not stan()["trwa"]:
         raise BladReplay("odtwarzanie nie trwa — najpierw vgm_replay_start")
-    ile = max(1, min(int(ile), 500))
+    try:
+        ile = wal.calkowita(ile, "ile", 1, 500)
+    except wal.BladWejscia as e:
+        raise BladReplay(str(e)) from e
     p = _ostatnia_swieca()
     przed = p["czas"] if p else None
     _r(f"for(var i=0;i<{ile};i++) r.doStep(); return 1;", czekaj=max(30, ile * 0.2))
@@ -158,7 +167,11 @@ def autoplay(wlacz: bool = True, opoznienie_ms: int | None = None) -> dict:
     if not s["trwa"]:
         raise BladReplay("odtwarzanie nie trwa — najpierw vgm_replay_start")
     if opoznienie_ms is not None:
-        _r(f"r.changeAutoplayDelay({int(opoznienie_ms)}); return 1;")
+        try:
+            opoznienie_ms = wal.calkowita(opoznienie_ms, "opoznienie_ms", 50, 60_000)
+        except wal.BladWejscia as e:
+            raise BladReplay(str(e)) from e
+        _r(f"r.changeAutoplayDelay({opoznienie_ms}); return 1;")
     if bool(wlacz) != s["autoodtwarzanie"]:
         _r("r.toggleAutoplay(); return 1;")
     time.sleep(1)

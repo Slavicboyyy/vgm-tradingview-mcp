@@ -18,6 +18,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import siec
+import pola as pola_rynki
+import walidacja as wal
+
 PODSTAWA = "https://scanner.tradingview.com"
 NAGLOWKI = {"User-Agent": "curl/8.5.0", "Accept": "application/json"}
 ODSTEP_S = 1.2
@@ -61,8 +65,9 @@ def _pobierz(sciezka: str, dane: dict | None = None, prob: int = 2):
         _odczekaj()
         req = urllib.request.Request(url, data=ciało, headers=naglowki)
         try:
-            with urllib.request.urlopen(req, timeout=25) as o:
-                return json.loads(o.read().decode("utf-8"))
+            return json.loads(siec.pobierz(req, timeout=25).decode("utf-8"))
+        except siec.BladSieci as e:
+            raise BladTV(str(e)) from e
         except urllib.error.HTTPError as e:
             if e.code in (403, 429):
                 raise BladTV(
@@ -85,7 +90,8 @@ def odczyt(symbol: str, pola: list[str] | None = None) -> dict:
     symbol: pełna nazwa z giełdą, np. "FX:EURUSD", "NASDAQ:NVDA", "COINBASE:BTCUSD".
     pola:   lista pól TradingView; domyślnie cena + najczęstsze wskaźniki.
     """
-    pola = pola or (POLA_CENA + POLA_WSKAZNIKI[:12] + POLA_OCENA)
+    symbol = wal.symbol(symbol)
+    pola = wal.lista(pola, "pola", wal.pole) if pola else (POLA_CENA + POLA_WSKAZNIKI[:12] + POLA_OCENA)
     zap = urllib.parse.urlencode({"symbol": symbol, "fields": ",".join(pola)})
     wynik = _pobierz(f"/symbol?{zap}")
     if not isinstance(wynik, dict) or not wynik:
@@ -95,7 +101,10 @@ def odczyt(symbol: str, pola: list[str] | None = None) -> dict:
 
 def wiele(symbole: list[str], pola: list[str] | None = None) -> list[dict]:
     """To samo dla wielu instrumentów naraz — jedno zapytanie zamiast wielu."""
-    pola = pola or (POLA_CENA[:4] + ["RSI", "ADX", "Recommend.All"])
+    symbole = wal.lista(symbole, "symbole", wal.symbol)
+    if not symbole:
+        raise BladTV("symbole: pusta lista")
+    pola = wal.lista(pola, "pola", wal.pole) if pola else (POLA_CENA[:4] + ["RSI", "ADX", "Recommend.All"])
     dane = {"symbols": {"tickers": symbole}, "columns": pola}
     o = _pobierz("/forex/scan", dane)
     wynik = []
@@ -112,9 +121,12 @@ def przeglad(rynek: str = "forex", warunki: list | None = None,
     warunki: lista w formacie TradingView, np.
              [{"left": "RSI", "operation": "less", "right": 30}]
     """
-    pola = pola or ["close", "change", "RSI", "ADX", "volume"]
+    wal.rynek(rynek, pola_rynki.RYNKI)
+    warunki = wal.warunki(warunki) if warunki else []
+    ile = wal.calkowita(ile, "ile", 1, 200)
+    pola = wal.lista(pola, "pola", wal.pole) if pola else ["close", "change", "RSI", "ADX", "volume"]
     dane = {
-        "filter": warunki or [],
+        "filter": warunki,
         "columns": pola,
         "sort": {"sortBy": "change", "sortOrder": "desc"},
         "range": [0, ile],
@@ -133,8 +145,8 @@ def mtf(symbol: str, wskazniki: list[str] | None = None,
     Zwraca {wskaźnik: {interwał: wartość}} — gotowe do sprawdzania zgodności
     między interwałami, czyli tego, co w bocie nazywa się MTF.
     """
-    wskazniki = wskazniki or ["RSI", "ADX", "Recommend.All"]
-    interwaly = interwaly or ["5", "15", "60", "240"]
+    wskazniki = wal.lista(wskazniki, "wskazniki", wal.pole) if wskazniki else ["RSI", "ADX", "Recommend.All"]
+    interwaly = wal.lista(interwaly, "interwaly", wal.interwal) if interwaly else ["5", "15", "60", "240"]
 
     pola = []
     for w in wskazniki:
@@ -160,7 +172,9 @@ def zgodnosc(symbol: str, interwaly: list[str] | None = None,
     Nie podejmuje decyzji, tylko liczy. Próg i sposób łączenia należą do silnika,
     bo to one wymagają pomiaru, a nie ten odczyt.
     """
-    interwaly = interwaly or ["5", "15", "60", "240"]
+    interwaly = wal.lista(interwaly, "interwaly", wal.interwal) if interwaly else ["5", "15", "60", "240"]
+    prog_kupno = wal.liczba(prog_kupno, "prog_kupno", 0, 100)
+    prog_sprzedaz = wal.liczba(prog_sprzedaz, "prog_sprzedaz", 0, 100)
     dane = mtf(symbol, ["RSI"], interwaly)["RSI"]
 
     kupno = [i for i, v in dane.items() if v is not None and v >= prog_kupno]
