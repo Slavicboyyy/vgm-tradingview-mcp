@@ -11,20 +11,25 @@ wstawianie na wykres. Skrypt ma być udowodniony, zanim dotknie okna.
 from __future__ import annotations
 
 import json
-import time
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from wspolne import ORIGIN_TV, REFERER_TV, UA_PRZEGLADARKI, odczekaj  # noqa: E402
 
 ADRES = "https://pine-facade.tradingview.com/pine-facade/translate_light/"
 
 # Zmierzone: nginx przed kompilatorem odrzuca zapytania bez Origin i Referer.
 # Samo User-Agent nie wystarcza — bez tych dwóch przychodzi 403.
 NAGLOWKI = {
-    "Origin": "https://www.tradingview.com",
-    "Referer": "https://www.tradingview.com/",
-    "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
+    "Origin": ORIGIN_TV,
+    "Referer": REFERER_TV,
+    "User-Agent": UA_PRZEGLADARKI,
     "Content-Type": "application/x-www-form-urlencoded",
 }
 
@@ -36,14 +41,11 @@ class BladPine(Exception):
     """Cokolwiek, co uniemożliwia sprawdzenie kodu."""
 
 
-def _odczekaj():
-    minelo = time.time() - _ostatnie[0]
-    if minelo < ODSTEP_S:
-        time.sleep(ODSTEP_S - minelo)
-    _ostatnie[0] = time.time()
+def _odczekaj() -> None:
+    odczekaj(_ostatnie, ODSTEP_S)
 
 
-def sprawdz(kod: str) -> dict:
+def sprawdz(kod: str) -> dict[str, Any]:
     """Kompiluje kod w kompilatorze TradingView i zwraca błędy z pozycjami.
 
     Zwraca:
@@ -59,15 +61,15 @@ def sprawdz(kod: str) -> dict:
 
     try:
         o = json.loads(urllib.request.urlopen(zad, timeout=30).read())
-    except urllib.error.HTTPError as e:
-        if e.code in (403, 429):
+    except urllib.error.HTTPError as blad_http:
+        if blad_http.code in (403, 429):
             raise BladPine(
-                f"kompilator odmówił ({e.code}). Zatrzymuję się — ponawianie "
+                f"kompilator odmówił ({blad_http.code}). Zatrzymuję się — ponawianie "
                 "przy tym kodzie prowadzi do blokady adresu."
-            ) from e
-        raise BladPine(f"HTTP {e.code} od kompilatora") from e
-    except Exception as e:
-        raise BladPine(f"{type(e).__name__}: {e}") from e
+            ) from blad_http
+        raise BladPine(f"HTTP {blad_http.code} od kompilatora") from blad_http
+    except Exception as blad:
+        raise BladPine(f"{type(blad).__name__}: {blad}") from blad
 
     if not o.get("success"):
         raise BladPine(f"kompilator odrzucił zapytanie: {str(o)[:150]}")
@@ -93,7 +95,7 @@ def sprawdz(kod: str) -> dict:
     return odp
 
 
-def _podglad(kod: str, bledy: list) -> str:
+def _podglad(kod: str, bledy: list[dict[str, Any]]) -> str:
     """Pokazuje linie z błędem razem ze skargą kompilatora pod spodem."""
     linie = kod.splitlines()
     kawalki = []
@@ -105,7 +107,7 @@ def _podglad(kod: str, bledy: list) -> str:
     return "\n".join(kawalki)
 
 
-def sprawdz_plik(sciezka: str) -> dict:
+def sprawdz_plik(sciezka: str) -> dict[str, Any]:
     """To samo, ale czyta kod z pliku."""
     import pathlib
 
@@ -137,7 +139,7 @@ def szkielet(nazwa: str = "Nowy wskaźnik", na_wykresie: bool = True) -> str:
                            na_wykresie="true" if na_wykresie else "false")
 
 
-def _demo():
+def _demo() -> None:
     print("1. kod poprawny")
     w = sprawdz('//@version=5\nindicator("test")\nplot(ta.sma(close, 20))')
     print(f"   poprawny: {w['poprawny']}, błędów: {len(w['bledy'])}")

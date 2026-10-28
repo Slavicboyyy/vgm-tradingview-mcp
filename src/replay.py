@@ -24,10 +24,12 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import wykres  # noqa: E402
+from typy import Json, Swieca  # noqa: E402
 
 
 class BladReplay(Exception):
@@ -41,7 +43,7 @@ var wv=function(x){ try{ return (x&&typeof x.value==='function')?x.value():x; }c
 """
 
 
-def _ostatnia_swieca():
+def _ostatnia_swieca() -> Swieca | None:
     """Ostatnia świeca z wykresu albo None.
 
     Bywa, że wykres nie ma ani jednej: odtwarzanie od początku historii
@@ -49,20 +51,17 @@ def _ostatnia_swieca():
     (zmierzone na EURUSD 3 min od 2001-11-28).
     """
     try:
-        s = wykres.swiece(2).get("swiece") or []
+        s: list[Swieca] = wykres.swiece(2).get("swiece") or []
         return s[-1] if s else None
     except Exception:
         return None
 
 
-def _r(kod: str, czekaj: float = 30):
-    w = wykres._wykonaj("(function(){" + _PROLOG + kod + "})()", czekaj=czekaj)
-    if isinstance(w, dict) and "blad" in w:
-        raise BladReplay(w["blad"])
-    return w
+def _r(kod: str, czekaj: float = 30) -> Any:
+    return wykres.uruchom(_PROLOG, kod, czekaj, BladReplay)
 
 
-def _na_milisekundy(data) -> int:
+def _na_milisekundy(data: str | float) -> int:
     """Przyjmuje 'YYYY-MM-DD', datę z godziną albo liczbę sekund.
 
     Zwraca milisekundy, bo `selectDate` liczy w milisekundach: podanie
@@ -80,12 +79,12 @@ def _na_milisekundy(data) -> int:
     raise BladReplay(f"nie rozumiem daty: {data} — podaj YYYY-MM-DD albo sekundy")
 
 
-def stan() -> dict:
+def stan() -> Json:
     """Stan odtwarzania: czy dostępne, czy trwa, na której świecy stoi.
 
     Zwraca też pozycję papierową i wynik zrealizowany, gdy jakaś jest.
     """
-    w = _r("""var o={dostepne:!!wv(r.isReplayAvailable()), trwa:!!wv(r.isReplayStarted()),
+    w: Json = _r("""var o={dostepne:!!wv(r.isReplayAvailable()), trwa:!!wv(r.isReplayStarted()),
       autoodtwarzanie:!!wv(r.isAutoplayStarted()), gotowe_do_gry:!!wv(r.isReadyToPlay()),
       pasek_widoczny:!!wv(r.isReplayToolbarVisible()), opoznienie:wv(r.autoplayDelay()),
       tryb:String(wv(r.replayMode())||''), historia_od:wv(r.getReplayDepth())};
@@ -109,7 +108,7 @@ def stan() -> dict:
     return w
 
 
-def start(data=None, czekaj_s: float = 20) -> dict:
+def start(data: str | float | None = None, czekaj_s: float = 20) -> Json:
     """Włącza odtwarzanie od podanej daty. Zostawia wykres w trybie odtwarzania.
 
     `data` pominięta = pierwsza dostępna świeca w historii instrumentu.
@@ -133,7 +132,7 @@ def start(data=None, czekaj_s: float = 20) -> dict:
     raise BladReplay(f"odtwarzanie nie wystartowało w {czekaj_s:.0f} s")
 
 
-def krok(ile: int = 1) -> dict:
+def krok(ile: int = 1) -> Json:
     """Przesuwa odtwarzanie o `ile` świec do przodu."""
     if not stan()["trwa"]:
         raise BladReplay("odtwarzanie nie trwa — najpierw vgm_replay_start")
@@ -148,7 +147,7 @@ def krok(ile: int = 1) -> dict:
     return {**s, "krokow": ile, "ruszyl": po is not None and po != przed}
 
 
-def autoplay(wlacz: bool = True, opoznienie_ms: int | None = None) -> dict:
+def autoplay(wlacz: bool = True, opoznienie_ms: int | None = None) -> Json:
     """Włącza lub wyłącza samoczynne przesuwanie świec.
 
     `opoznienie_ms` bierze się z listy TradingView; 100 znaczy dziesięć
@@ -166,7 +165,7 @@ def autoplay(wlacz: bool = True, opoznienie_ms: int | None = None) -> dict:
 
 
 
-def stop() -> dict:
+def stop() -> Json:
     """Kończy odtwarzanie i wraca do czasu rzeczywistego."""
     s = stan()
     if not s["trwa"]:
