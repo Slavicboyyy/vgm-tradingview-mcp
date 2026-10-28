@@ -13,10 +13,17 @@ Zasady, których ten moduł pilnuje sam:
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from wspolne import odczekaj  # noqa: E402
 
 PODSTAWA = "https://scanner.tradingview.com"
 NAGLOWKI = {"User-Agent": "curl/8.5.0", "Accept": "application/json"}
@@ -34,22 +41,18 @@ POLA_WSKAZNIKI = [
 ]
 POLA_OCENA = ["Recommend.All", "Recommend.MA", "Recommend.Other"]
 
-_ostatnie = 0.0
+_ostatnie = [0.0]
 
 
 class BladTV(Exception):
     """Cokolwiek, co uniemożliwia odczyt — z czytelnym powodem."""
 
 
-def _odczekaj():
-    global _ostatnie
-    minelo = time.time() - _ostatnie
-    if minelo < ODSTEP_S:
-        time.sleep(ODSTEP_S - minelo)
-    _ostatnie = time.time()
+def _odczekaj() -> None:
+    odczekaj(_ostatnie, ODSTEP_S)
 
 
-def _pobierz(sciezka: str, dane: dict | None = None, prob: int = 2):
+def _pobierz(sciezka: str, dane: dict[str, Any] | None = None, prob: int = 2) -> Any:
     """Jedno zapytanie. Przy 403/429 przerywa — nie ponawia."""
     url = f"{PODSTAWA}{sciezka}"
     ciało = json.dumps(dane).encode() if dane is not None else None
@@ -79,7 +82,7 @@ def _pobierz(sciezka: str, dane: dict | None = None, prob: int = 2):
     raise BladTV("nie udało się pobrać")
 
 
-def odczyt(symbol: str, pola: list[str] | None = None) -> dict:
+def odczyt(symbol: str, pola: list[str] | None = None) -> dict[str, Any]:
     """Bieżące wartości dla jednego instrumentu.
 
     symbol: pełna nazwa z giełdą, np. "FX:EURUSD", "NASDAQ:NVDA", "COINBASE:BTCUSD".
@@ -93,7 +96,7 @@ def odczyt(symbol: str, pola: list[str] | None = None) -> dict:
     return wynik
 
 
-def wiele(symbole: list[str], pola: list[str] | None = None) -> list[dict]:
+def wiele(symbole: list[str], pola: list[str] | None = None) -> list[dict[str, Any]]:
     """To samo dla wielu instrumentów naraz — jedno zapytanie zamiast wielu."""
     pola = pola or (POLA_CENA[:4] + ["RSI", "ADX", "Recommend.All"])
     dane = {"symbols": {"tickers": symbole}, "columns": pola}
@@ -104,8 +107,8 @@ def wiele(symbole: list[str], pola: list[str] | None = None) -> list[dict]:
     return wynik
 
 
-def przeglad(rynek: str = "forex", warunki: list | None = None,
-             pola: list[str] | None = None, ile: int = 30) -> list[dict]:
+def przeglad(rynek: str = "forex", warunki: list[dict[str, Any]] | None = None,
+             pola: list[str] | None = None, ile: int = 30) -> list[dict[str, Any]]:
     """Przegląd rynku z filtrem.
 
     rynek:   "forex", "crypto", "america", "poland"…
@@ -124,7 +127,7 @@ def przeglad(rynek: str = "forex", warunki: list | None = None,
 
 
 def mtf(symbol: str, wskazniki: list[str] | None = None,
-        interwaly: list[str] | None = None) -> dict:
+        interwaly: list[str] | None = None) -> dict[str, dict[str, float | None]]:
     """Ten sam wskaźnik na kilku interwałach — jednym zapytaniem.
 
     TradingView przyjmuje sufiks przy nazwie pola: `RSI|60` to RSI z godzinowego.
@@ -154,7 +157,7 @@ def mtf(symbol: str, wskazniki: list[str] | None = None,
 
 
 def zgodnosc(symbol: str, interwaly: list[str] | None = None,
-             prog_kupno: float = 55, prog_sprzedaz: float = 45) -> dict:
+             prog_kupno: float = 55, prog_sprzedaz: float = 45) -> dict[str, Any]:
     """Czy interwały mówią to samo — surowiec dla bramki wejścia.
 
     Nie podejmuje decyzji, tylko liczy. Próg i sposób łączenia należą do silnika,
@@ -177,7 +180,7 @@ def zgodnosc(symbol: str, interwaly: list[str] | None = None,
     }
 
 
-def _demo():
+def _demo() -> None:
     """Sprawdzenie na żywych danych — uruchom ten plik wprost."""
     print("1. odczyt jednego instrumentu")
     d = odczyt("FX:EURUSD", ["close", "change", "RSI", "SMA50", "ATR", "Recommend.All"])
@@ -193,15 +196,15 @@ def _demo():
         print(f"   {w['symbol']:14} RSI={w.get('RSI')} zmiana={w.get('change')}")
 
     print("\n4. wiele interwałów jednym zapytaniem")
-    for w, poz in mtf("FX:EURUSD", ["RSI", "ADX"], ["5", "15", "60", "240"]).items():
+    for wsk, poz in mtf("FX:EURUSD", ["RSI", "ADX"], ["5", "15", "60", "240"]).items():
         opis = "  ".join(f"{i}m={v:.1f}" if v else f"{i}m=brak" for i, v in sorted(poz.items(), key=lambda x: int(x[0])))
-        print(f"   {w:16} {opis}")
+        print(f"   {wsk:16} {opis}")
 
     print("\n5. zgodność interwałów — surowiec dla bramki")
     z = zgodnosc("FX:EURUSD")
-    print(f"   za kupnem:    {z[chr(39)+chr(122)+chr(97)+chr(95)+chr(107)+chr(117)+chr(112)+chr(110)+chr(101)+chr(109)+chr(39)] if False else z["za_kupnem"]}")
-    print(f"   za sprzedażą: {z["za_sprzedaza"]}")
-    print(f"   wszystkie zgodne: {z["wszystkie_zgodne"]}")
+    print(f"   za kupnem:    {z['za_kupnem']}")
+    print(f"   za sprzedażą: {z['za_sprzedaza']}")
+    print(f"   wszystkie zgodne: {z['wszystkie_zgodne']}")
 
     print("\n6. obsługa błędu — zła nazwa")
     try:

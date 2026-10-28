@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -31,11 +33,12 @@ serwer = Server("vgm-mcp")
 UWAGA = ("Dane z publicznego punktu TradingView, liczone po ich stronie. "
          "To nie są kwotowania brokera — do handlu użyj ceny od swojego brokera.")
 
-S = {"type": "string"}
-L = {"type": "array", "items": {"type": "string"}}
+S: dict[str, Any] = {"type": "string"}
+L: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 
 
-def _n(nazwa, opis, wlasciwosci=None, wymagane=None):
+def _n(nazwa: str, opis: str, wlasciwosci: dict[str, Any] | None = None,
+       wymagane: list[str] | None = None) -> Tool:
     return Tool(
         name=nazwa,
         description=opis + " " + UWAGA,
@@ -534,9 +537,18 @@ async def lista_narzedzi() -> list[Tool]:
 
 
 @serwer.call_tool()
-async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
-    def ok(x):
+async def wywolaj(nazwa: str, a: dict[str, Any]) -> list[TextContent]:
+    def ok(x: Any) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(x, ensure_ascii=False, indent=1))]
+
+    def przez_tabele(tabela: dict[str, Callable[[dict[str, Any]], Any]],
+                     wyjatek: type[Exception],
+                     dodatek: dict[str, str] | None = None) -> list[TextContent]:
+        """Woła narzędzie z tabeli; wyjątek warstwy staje się odpowiedzią z `blad`."""
+        try:
+            return ok(tabela[nazwa](a))
+        except wyjatek as e:
+            return ok({"blad": str(e), "narzedzie": nazwa, **(dodatek or {})})
 
     try:
         if nazwa == "vgm_odczyt":
@@ -582,7 +594,8 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
             return ok(analiza.skan_wlasny(a["rynek"], a["warunki"],
                                           a.get("pola"), a.get("ile", 30)))
         # ── sesja ───────────────────────────────────────────────────────
-        SESJA = {"vgm_sesja": lambda a: sesja.czy_zalogowany(),
+        SESJA: dict[str, Callable[[dict[str, Any]], Any]] = {
+                 "vgm_sesja": lambda a: sesja.czy_zalogowany(),
                  "vgm_alerty": lambda a: sesja.alerty(),
                  "vgm_lista_obserwowanych": lambda a: sesja.lista_obserwowanych(),
                  "vgm_skrypty_pine": lambda a: sesja.skrypty_pine(),
@@ -593,11 +606,9 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
                  "vgm_tester_raport": lambda a: sesja.tester_raport()}
         if nazwa in SESJA:
             import sesja
-            try:
-                return ok(SESJA[nazwa](a))
-            except sesja.BladSesji as e:
-                return ok({"blad": str(e), "narzedzie": nazwa,
-                           "podpowiedz": "zaloguj się na TradingView w przeglądarce z CDP"})
+            return przez_tabele(
+                SESJA, sesja.BladSesji,
+                {"podpowiedz": "zaloguj się na TradingView w przeglądarce z CDP"})
 
         # ── Pine ────────────────────────────────────────────────────────
         if nazwa.startswith("vgm_pine"):
@@ -625,6 +636,7 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
                              "vgm_odniesienie_trzymanie", "vgm_jak_dlugo_trzymac",
                              "vgm_koszt_a_przewaga", "vgm_walk_forward",
                              "vgm_replay_", "vgm_uklad_")):
+            import pomiar
             import wykres  # dopiero tutaj — reszta działa bez websocket-client
 
             try:
@@ -639,7 +651,6 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
                 if nazwa == "vgm_wykres_przelacz":
                     return ok(wykres.przelacz(a["symbol"], a.get("interwal")))
                 if nazwa == "vgm_przeglad_instrumentow":
-                    import pomiar
                     inst = a.get("instrumenty")
                     if inst:
                         inst = [tuple(x) for x in inst]
@@ -659,70 +670,57 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
                 if nazwa == "vgm_swiece_statystyka":
                     return ok(analiza.statystyka_swiec(a.get("ile", 200)))
                 if nazwa == "vgm_zmierz_prog":
-                    import pomiar
                     return ok(pomiar.zmierz_prog(
                         "RSI", a.get("prog", 30), a.get("kierunek", "ponizej"),
                         a.get("po_ilu", 10), a.get("ile_swiec", 0),
                         a.get("spread_proc", 0.02)))
                 if nazwa.startswith("vgm_uklad_"):
                     import uklad
-                    UKLAD = {"vgm_uklad_stan": lambda a: uklad.stan(),
+                    UKLAD: dict[str, Callable[[dict[str, Any]], Any]] = {
+                             "vgm_uklad_stan": lambda a: uklad.stan(),
                              "vgm_uklad_ustaw": lambda a: uklad.ustaw(a.get("kod", "s")),
                              "vgm_uklad_wybierz": lambda a: uklad.wybierz(a.get("indeks", 0)),
                              "vgm_uklad_symbol": lambda a: uklad.symbol_w_wykresie(
                                  a["indeks"], a["symbol"], a.get("interwal"))}
-                    try:
-                        return ok(UKLAD[nazwa](a))
-                    except uklad.BladUkladu as e:
-                        return ok({"blad": str(e), "narzedzie": nazwa})
+                    return przez_tabele(UKLAD, uklad.BladUkladu)
                 if nazwa.startswith("vgm_replay_"):
                     import replay
-                    REPLAY = {"vgm_replay_stan": lambda a: replay.stan(),
+                    REPLAY: dict[str, Callable[[dict[str, Any]], Any]] = {
+                              "vgm_replay_stan": lambda a: replay.stan(),
                               "vgm_replay_start": lambda a: replay.start(a.get("data")),
                               "vgm_replay_krok": lambda a: replay.krok(a.get("ile", 1)),
                               "vgm_replay_autoplay": lambda a: replay.autoplay(
                                   a.get("wlacz", True), a.get("opoznienie_ms")),
                               "vgm_replay_stop": lambda a: replay.stop()}
-                    try:
-                        return ok(REPLAY[nazwa](a))
-                    except replay.BladReplay as e:
-                        return ok({"blad": str(e), "narzedzie": nazwa})
+                    return przez_tabele(REPLAY, replay.BladReplay)
                 if nazwa == "vgm_walk_forward":
-                    import pomiar
                     return ok(pomiar.walk_forward(
                         a.get("wskaznik", "RSI"), a.get("kierunek", "ponizej"), a.get("progi"),
                         a.get("po_ilu", 10), a.get("ile_swiec", 0), a.get("czesc_ucz", 0.7),
                         a.get("spread_proc", 0.0)))
                 if nazwa == "vgm_zmierz":
-                    import pomiar
                     return ok(pomiar.zmierz(
                         a.get("wskaznik", "RSI"), a.get("prog", 30),
                         a.get("kierunek", "ponizej"), a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
                 if nazwa == "vgm_sygnal_czy_trend":
-                    import pomiar
                     return ok(pomiar.czy_sygnal_czy_trend(
                         a.get("wskaznik", "Bollinger"), a.get("prog", 90),
                         a.get("kierunek", "powyzej"), a.get("po_ilu", 10)))
                 if nazwa == "vgm_koszt_a_przewaga":
-                    import pomiar
                     return ok(pomiar.koszt_a_przewaga(
                         a.get("wskaznik", "Bollinger"), a.get("prog", 90),
                         a.get("kierunek", "powyzej"), a.get("po_ilu", 40),
                         0, a.get("koszty")))
                 if nazwa == "vgm_jak_dlugo_trzymac":
-                    import pomiar
                     return ok(pomiar.jak_dlugo_trzymac(
                         a.get("wskaznik", "Bollinger"), a.get("prog", 90),
                         a.get("kierunek", "powyzej"), a.get("dlugosci")))
                 if nazwa == "vgm_odniesienie_trzymanie":
-                    import pomiar
                     return ok(pomiar.odniesienie_trzymanie(a.get("po_ilu", 10)))
                 if nazwa == "vgm_przeglad_wskaznikow":
-                    import pomiar
                     return ok(pomiar.przeglad_wskaznikow(
                         a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
                 if nazwa == "vgm_porownaj_progi":
-                    import pomiar
                     return ok(pomiar.porownaj_progi(
                         a.get("progi"), a.get("kierunek", "ponizej"),
                         a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
@@ -745,7 +743,7 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
         return ok({"blad": f"brakuje wymaganego pola: {e}", "narzedzie": nazwa})
 
 
-async def main():
+async def main() -> None:
     async with stdio_server() as (we, wy):
         await serwer.run(we, wy, serwer.create_initialization_options())
 

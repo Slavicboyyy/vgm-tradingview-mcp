@@ -13,31 +13,44 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import time  # noqa: E402
+from collections.abc import Callable  # noqa: E402
 
 import dane  # noqa: E402
 import pola  # noqa: E402
+from typy import Json, Swieca  # noqa: E402
 
 
-def obraz(symbol: str, interwal: str | None = None) -> dict:
+def _z_interwalem(nazwa: str, interwal: str | None) -> str:
+    return f"{nazwa}|{interwal}" if interwal else nazwa
+
+
+def _czytaj(symbol: str, nazwy: list[str],
+            interwal: str | None) -> Callable[[str], float | None]:
+    """Jedno zapytanie o `nazwy` i funkcja zwracająca pole po nazwie bez sufiksu."""
+    s = dane.odczyt(symbol, [_z_interwalem(x, interwal) for x in nazwy])
+    return lambda k: s.get(_z_interwalem(k, interwal))
+
+
+def obraz(symbol: str, interwal: str | None = None) -> Json:
     """Pełny obraz instrumentu — 62 pola pogrupowane tematycznie.
 
     Jedno zapytanie zamiast dziewięciu. Z `interwal` bierze wszystko
     z podanego przedziału czasu (np. "60" = godzinowy).
     """
-    lista = [f"{p}|{interwal}" if interwal else p for p in pola.WSZYSTKIE]
+    lista = [_z_interwalem(p, interwal) for p in pola.WSZYSTKIE]
     surowe = dane.odczyt(symbol, lista)
 
     czysto = {}
     for k, v in surowe.items():
         czysto[k.split("|")[0] if "|" in k else k] = v
 
-    wynik = {"symbol": symbol, "interwal": interwal or "biezacy"}
+    wynik: Json = {"symbol": symbol, "interwal": interwal or "biezacy"}
     for nazwa, grupa in pola.GRUPY.items():
         wynik[nazwa] = {p: czysto.get(p) for p in grupa if czysto.get(p) is not None}
     return wynik
 
 
-def polozenie(symbol: str, interwal: str | None = None) -> dict:
+def polozenie(symbol: str, interwal: str | None = None) -> Json:
     """Gdzie stoi cena względem swoich odniesień — w procentach, nie na oko.
 
     Odpowiada na pytania, które inaczej trzeba liczyć ręcznie:
@@ -45,9 +58,7 @@ def polozenie(symbol: str, interwal: str | None = None) -> dict:
     """
     p = ["close", "BB.upper", "BB.lower", "EMA20", "EMA50", "EMA200",
          "price_52_week_high", "price_52_week_low", "ATR"]
-    lista = [f"{x}|{interwal}" if interwal else x for x in p]
-    s = dane.odczyt(symbol, lista)
-    g = lambda k: s.get(f"{k}|{interwal}" if interwal else k)
+    g = _czytaj(symbol, p, interwal)
 
     c = g("close")
     if c is None:
@@ -57,12 +68,12 @@ def polozenie(symbol: str, interwal: str | None = None) -> dict:
     rh, rl = g("price_52_week_high"), g("price_52_week_low")
     atr = g("ATR")
 
-    def procent(dol, gora):
+    def procent(dol: float | None, gora: float | None) -> float | None:
         if dol is None or gora is None or gora == dol:
             return None
         return round((c - dol) / (gora - dol) * 100, 1)
 
-    def odchylenie(sr):
+    def odchylenie(sr: float | None) -> float | None:
         if sr is None or not sr:
             return None
         return round((c - sr) / sr * 100, 2)
@@ -83,19 +94,16 @@ def polozenie(symbol: str, interwal: str | None = None) -> dict:
     }
 
 
-def uklad_srednich(symbol: str, interwal: str | None = None) -> dict:
+def uklad_srednich(symbol: str, interwal: str | None = None) -> Json:
     """Czy średnie są ułożone w kolejności — bez nazywania tego trendem.
 
     Zwraca surowy fakt: ile średnich stoi w kolejności rosnącej lub malejącej.
     To, czy taki układ cokolwiek zapowiada, jest do zmierzenia, nie do założenia.
     """
     kolejnosc = ["EMA5", "EMA10", "EMA20", "EMA50", "EMA100", "EMA200"]
-    lista = [f"{x}|{interwal}" if interwal else x for x in kolejnosc + ["close"]]
-    s = dane.odczyt(symbol, lista)
-    g = lambda k: s.get(f"{k}|{interwal}" if interwal else k)
+    g = _czytaj(symbol, kolejnosc + ["close"], interwal)
 
-    war = [(n, g(n)) for n in kolejnosc]
-    war = [(n, v) for n, v in war if v is not None]
+    war: list[tuple[str, float]] = [(n, v) for n in kolejnosc if (v := g(n)) is not None]
     if len(war) < 2:
         raise dane.BladTV(f"za mało średnich dla {symbol}")
 
@@ -116,7 +124,7 @@ def uklad_srednich(symbol: str, interwal: str | None = None) -> dict:
 
 
 def zgodnosc_pelna(symbol: str, wskazniki: list[str] | None = None,
-                   interwaly: list[str] | None = None) -> dict:
+                   interwaly: list[str] | None = None) -> Json:
     """Zgodność wielu wskaźników na wielu interwałach — jednym zapytaniem.
 
     Rozszerzenie `dane.zgodnosc` na dowolny zestaw. Zwraca tabelę wartości
@@ -144,7 +152,7 @@ def zgodnosc_pelna(symbol: str, wskazniki: list[str] | None = None,
     }
 
 
-def porownaj(symbole: list[str], pola_do: list[str] | None = None) -> list[dict]:
+def porownaj(symbole: list[str], pola_do: list[str] | None = None) -> list[Json]:
     """Kilka instrumentów obok siebie, posortowane po sile ruchu."""
     pola_do = pola_do or ["close", "change", "RSI", "ADX",
                           "relative_volume_10d_calc", "Recommend.All"]
@@ -153,25 +161,25 @@ def porownaj(symbole: list[str], pola_do: list[str] | None = None) -> list[dict]
 
 
 # ── gotowe skany rynku ──────────────────────────────────────────────────
-def skan_wyprzedane(rynek: str = "forex", prog: float = 30, ile: int = 20):
+def skan_wyprzedane(rynek: str = "forex", prog: float = 30, ile: int = 20) -> list[Json]:
     """Instrumenty z RSI poniżej progu."""
     return dane.przeglad(rynek, [{"left": "RSI", "operation": "less", "right": prog}],
                          ["close", "change", "RSI", "ADX", "volume"], ile)
 
 
-def skan_wykupione(rynek: str = "forex", prog: float = 70, ile: int = 20):
+def skan_wykupione(rynek: str = "forex", prog: float = 70, ile: int = 20) -> list[Json]:
     """Instrumenty z RSI powyżej progu."""
     return dane.przeglad(rynek, [{"left": "RSI", "operation": "greater", "right": prog}],
                          ["close", "change", "RSI", "ADX", "volume"], ile)
 
 
-def skan_silny_trend(rynek: str = "forex", prog_adx: float = 30, ile: int = 20):
+def skan_silny_trend(rynek: str = "forex", prog_adx: float = 30, ile: int = 20) -> list[Json]:
     """Instrumenty z ADX powyżej progu — silny ruch kierunkowy."""
     return dane.przeglad(rynek, [{"left": "ADX", "operation": "greater", "right": prog_adx}],
                          ["close", "change", "ADX", "ADX+DI", "ADX-DI", "RSI"], ile)
 
 
-def skan_wolumen(rynek: str = "forex", krotnosc: float = 2.0, ile: int = 20):
+def skan_wolumen(rynek: str = "forex", krotnosc: float = 2.0, ile: int = 20) -> list[Json]:
     """Instrumenty z wolumenem powyżej wielokrotności średniej z 10 dni."""
     return dane.przeglad(
         rynek,
@@ -179,8 +187,8 @@ def skan_wolumen(rynek: str = "forex", krotnosc: float = 2.0, ile: int = 20):
         ["close", "change", "volume", "relative_volume_10d_calc", "RSI"], ile)
 
 
-def skan_wlasny(rynek: str, warunki: list[dict], pola_do: list[str] | None = None,
-                ile: int = 30):
+def skan_wlasny(rynek: str, warunki: list[Json], pola_do: list[str] | None = None,
+                ile: int = 30) -> list[Json]:
     """Dowolny filtr TradingView — pełna swoboda.
 
     Przykład: [{"left": "RSI", "operation": "less", "right": 30},
@@ -191,7 +199,7 @@ def skan_wlasny(rynek: str, warunki: list[dict], pola_do: list[str] | None = Non
 
 
 # ── liczenie na świecach z wykresu ──────────────────────────────────────
-def _swiece_z_wykresu(ile=0):
+def _swiece_z_wykresu(ile: int = 0) -> list[Swieca]:
     """Pobiera świece z otwartego wykresu. Osobno, żeby reszta modułu
     działała bez przeglądarki.
 
@@ -201,10 +209,11 @@ def _swiece_z_wykresu(ile=0):
     """
     import wykres
     w = wykres.swiece(ile if ile and ile > 0 else 5000)
-    return w["swiece"]
+    swiece: list[Swieca] = w["swiece"]
+    return swiece
 
 
-def statystyka_swiec(ile: int = 200) -> dict:
+def statystyka_swiec(ile: int = 200) -> Json:
     """Liczby policzone na świecach z wykresu, bez zewnętrznego źródła danych.
 
     Zwraca surowe miary: rozpiętość, średni zasięg świecy, udział świec
@@ -244,7 +253,7 @@ def statystyka_swiec(ile: int = 200) -> dict:
     }
 
 
-def zmiennosc_swiec(ile: int = 200, okno: int = 20) -> dict:
+def zmiennosc_swiec(ile: int = 200, okno: int = 20) -> Json:
     """Zmienność liczona w dwóch oknach — świeższym i wcześniejszym.
 
     Podział na dwie części to ta sama zasada, którą stosujemy przy każdym
@@ -255,7 +264,7 @@ def zmiennosc_swiec(ile: int = 200, okno: int = 20) -> dict:
     if len(s) < okno * 2:
         raise dane.BladTV(f"potrzeba co najmniej {okno * 2} świec, jest {len(s)}")
 
-    def miara(czesc):
+    def miara(czesc: list[Swieca]) -> Json:
         z = [x["szczyt"] - x["dolek"] for x in czesc]
         c = [x["zamkniecie"] for x in czesc]
         sredni = sum(z) / len(z)
@@ -278,7 +287,7 @@ def zmiennosc_swiec(ile: int = 200, okno: int = 20) -> dict:
 
 
 def swiece_wiele_przedzialow(przedzialy: list[str] | None = None,
-                             ile: int = 100) -> dict:
+                             ile: int = 100) -> Json:
     """Statystyka świec z kilku przedziałów czasu, jeden po drugim.
 
     Przełącza wykres na każdy przedział, pobiera świece, liczy i wraca
@@ -289,7 +298,7 @@ def swiece_wiele_przedzialow(przedzialy: list[str] | None = None,
 
     przedzialy = przedzialy or ["15", "60", "240"]
     poczatkowy = wykres.stan()["interwal"]
-    wynik = {}
+    wynik: Json = {}
 
     for p in przedzialy:
         try:
@@ -308,14 +317,14 @@ def swiece_wiele_przedzialow(przedzialy: list[str] | None = None,
     return {"przedzial_wyjsciowy": poczatkowy, "wyniki": wynik}
 
 
-def obraz_pelny(symbol: str) -> dict:
+def obraz_pelny(symbol: str) -> Json:
     """Wszystko, co wiemy o instrumencie, w jednym wywołaniu.
 
     Łączy dane publiczne (91 pól, cztery przedziały czasu) z tym, co widać
     na wykresie, gdy przeglądarka jest dostępna. Bez przeglądarki zwraca
     samą część publiczną i mówi o tym wprost.
     """
-    wynik = {
+    wynik: Json = {
         "symbol": symbol,
         "pola": obraz(symbol),
         "polozenie": polozenie(symbol),
@@ -338,7 +347,7 @@ def obraz_pelny(symbol: str) -> dict:
     return wynik
 
 
-def _demo():
+def _demo() -> None:
     print("1. pełny obraz — 62 pola w dziewięciu grupach")
     o = obraz("FX:EURUSD")
     for g, w in o.items():
