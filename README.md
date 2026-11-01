@@ -26,7 +26,9 @@ wykresu, mimo że nie dotykają samej strony.
 - **Python 3.12 lub nowszy.** Kod używa składni f-stringów dostępnej od 3.12
   (np. w `src/dane.py`), więc na starszym Pythonie moduł nie zaimportuje się.
 - Pakiety z `requirements.txt`:
-  - `mcp>=1.0.0` – biblioteka serwera MCP,
+  - `mcp>=1.0.0,<2` – biblioteka serwera MCP. Górna granica jest celowa: serwer
+    używa dekoratorów `list_tools`/`call_tool` z mcp 1.x, których w mcp 2.x nie ma
+    (świeża instalacja bez granicy dostaje 2.x i `src/serwer.py` się nie uruchamia),
   - `websocket-client>=1.6.0` – potrzebny tylko warstwie wykresu i sesji
     (importowany dopiero przy pierwszym użyciu takiego narzędzia).
 - Dostęp do internetu (publiczne punkty TradingView).
@@ -1024,11 +1026,14 @@ Jedno wywołanie narzędzia ma twardy limit 240 s.
 
 Testy z katalogu `tests/` działają **bez sieci, bez przeglądarki i bez konta**:
 pakiet `mcp` jest w nich podmieniany atrapą, a każda próba otwarcia połączenia
-kończy test błędem.
+kończy test błędem. Wyjątkiem jest `tests/test_prawdziwe_mcp.py`: importuje
+`src/serwer.py` w osobnym procesie z prawdziwym, zainstalowanym `mcp` i nie przejdzie
+na mcp 2.x.
 
 ```bash
-pip install -r requirements-dev.txt   # pytest, mcp, websocket-client
-python3 -m pytest                      # konfiguracja w pytest.ini: testpaths = tests
+pip install -r requirements-dev.txt   # pytest, mypy, mcp, websocket-client
+python3 -m pytest -q                   # konfiguracja w pytest.ini: testpaths = tests
+python3 -m mypy                        # konfiguracja w pyproject.toml, sprawdza src/
 ```
 
 Osobno są sprawdzenia, które **łączą się z żywym TradingView** (potrzebują internetu,
