@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import stat
 import tempfile
 from collections.abc import Callable, Collection
 from pathlib import Path
@@ -180,8 +181,21 @@ def warunki(x: object) -> list[dict[str, Any]]:
 
 # ── ścieżki plików ──────────────────────────────────────────────────────
 def katalog_odczytu() -> Path:
-    """Skąd wolno czytać pliki z kodem: VGM_KATALOG_PINE albo katalog roboczy."""
-    return Path(os.environ.get("VGM_KATALOG_PINE") or os.getcwd()).resolve()
+    """Jedyny katalog, z którego wolno czytać pliki z kodem: VGM_KATALOG_PINE.
+
+    Zmienna musi być ustawiona jawnie, na ścieżkę bezwzględną do istniejącego
+    katalogu. Bez niej odczyt plików jest wyłączony — nie zgadujemy katalogu
+    (np. roboczego), bo treść pliku wychodzi do kompilatora TradingView."""
+    surowy = os.environ.get("VGM_KATALOG_PINE", "").strip()
+    if not surowy:
+        raise BladWejscia("odczyt plików wyłączony — ustaw VGM_KATALOG_PINE "
+                          "na katalog z plikami .pine/.txt")
+    if not os.path.isabs(surowy):
+        raise BladWejscia("VGM_KATALOG_PINE musi być ścieżką bezwzględną")
+    baza = Path(surowy).resolve()
+    if not baza.is_dir():
+        raise BladWejscia("VGM_KATALOG_PINE nie wskazuje istniejącego katalogu")
+    return baza
 
 
 def katalog_zapisu() -> Path:
@@ -198,20 +212,24 @@ def _wewnatrz(p: Path, baza: Path) -> bool:
         return False
 
 
-def sciezka_do_odczytu(x: object, baza: Path | None = None) -> Path:
+def sciezka_do_odczytu(x: object) -> Path:
     """Plik z kodem Pine. Treść idzie do TradingView, więc to wyciek, jeśli
     klient może wskazać dowolny plik — dlatego tylko *.pine/*.txt z katalogu
-    bazowego, po rozwiązaniu dowiązań, zwykły plik, z limitem rozmiaru."""
+    VGM_KATALOG_PINE, po rozwiązaniu dowiązań, zwykły plik, z limitem rozmiaru."""
     t = tekst(x, "sciezka", 1024)
-    baza = (baza or katalog_odczytu()).resolve()
+    baza = katalog_odczytu()
     p = (baza / t).resolve()           # ścieżka absolutna w `t` wygrywa z bazą — łapie ją sprawdzenie niżej
     if not _wewnatrz(p, baza):
-        raise BladWejscia(f"sciezka: plik poza katalogiem {baza} (zmień VGM_KATALOG_PINE)")
-    if p.suffix.lower() not in (".pine", ".txt"):
+        raise BladWejscia("sciezka: plik poza katalogiem VGM_KATALOG_PINE")
+    if p.suffix.lower() not in (".pine", ".txt"):    # po rozwiązaniu: liczy się cel dowiązania
         raise BladWejscia("sciezka: dozwolone tylko pliki .pine i .txt")
-    if not p.is_file():
-        raise BladWejscia(f"sciezka: nie ma takiego pliku: {t}")
-    if p.stat().st_size > MAX_PLIK_PINE:
+    try:
+        st = p.stat()
+    except OSError:
+        raise BladWejscia(f"sciezka: nie ma takiego pliku: {t}") from None
+    if not stat.S_ISREG(st.st_mode):
+        raise BladWejscia("sciezka: to nie jest zwykły plik")
+    if st.st_size > MAX_PLIK_PINE:
         raise BladWejscia(f"sciezka: plik większy niż {MAX_PLIK_PINE} bajtów")
     return p
 

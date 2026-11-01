@@ -231,6 +231,16 @@ def test_pine_sprawdz_plik_z_katalogu_bazowego_dziala(monkeypatch, tmp_path):
     assert w["poprawny"] is True
 
 
+def test_pine_sprawdz_plik_bez_vgm_katalog_pine_odrzucony(monkeypatch, tmp_path):
+    (tmp_path / "a.pine").write_text("//@version=5\nindicator('x')")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VGM_KATALOG_PINE", raising=False)
+    monkeypatch.setattr(pine, "sprawdz", lambda k: pytest.fail("odczyt bez VGM_KATALOG_PINE"))
+    for sciezka in ("a.pine", str(tmp_path / "a.pine")):
+        w = _wywolaj("vgm_pine_sprawdz_plik", {"sciezka": sciezka})
+        assert "VGM_KATALOG_PINE" in w["blad"]
+
+
 def test_szkielet_nazwa_nie_wstrzykuje_kodu_pine():
     with pytest.raises(pine.BladPine):
         pine.szkielet('x")\nstrategy.entry("a", strategy.long')
