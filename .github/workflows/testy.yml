@@ -1,0 +1,28 @@
+name: testy
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Zależności
+        run: python -m pip install -r requirements-dev.txt
+      # Bez sekretów i bez sieci: conftest podmienia `mcp` atrapą i blokuje gniazda;
+      # tests/test_prawdziwe_mcp.py sprawdza serwer na zainstalowanym mcp 1.x.
+      - name: pytest
+        run: python -m pytest -q
+      # Konfiguracja w pyproject.toml ([tool.mypy], files = src).
+      - name: mypy
+        run: python -m mypy

@@ -5,7 +5,7 @@ TradingView potrafi podzielić okno na 2, 3, 4, 6 albo 8 wykresów. Każdy ma
 własny instrument i przedział, więc da się patrzeć na ten sam rynek w kilku
 przedziałach naraz albo porównać kilka instrumentów bez przełączania.
 
-Zmierzone na koncie pro_premium przez CDP (port 9333): `layout`, `setLayout`,
+Zmierzone przez CDP na zalogowanym koncie TradingView: `layout`, `setLayout`,
 `chartsCount`, `activeChartIndex`, `setActiveChart` po stronie API strony,
 plus `paneWidgets` dla paneli wewnątrz jednego wykresu (cena, wskaźniki).
 
@@ -19,14 +19,17 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import walidacja as wal  # noqa: E402
 import wykres  # noqa: E402
+from typy import Json  # noqa: E402
 
 # Kody układów TradingView. Pierwsza litera to liczba wykresów, reszta opisuje
 # podział. 's' znaczy jeden wykres na całe okno.
-UKLADY = {
+UKLADY: dict[str, str] = {
     "s": "jeden wykres",
     "2h": "dwa obok siebie w poziomie",
     "2v": "dwa jeden nad drugim",
@@ -48,26 +51,23 @@ var wv=function(x){ try{ return (x&&typeof x.value==='function')?x.value():x; }c
 """
 
 
-def _u(kod: str, czekaj: float = 30):
-    w = wykres._wykonaj("(function(){" + _PROLOG + kod + "})()", czekaj=czekaj)
-    if isinstance(w, dict) and "blad" in w:
-        raise BladUkladu(w["blad"])
-    return w
+def _u(kod: str, czekaj: float = 30) -> Any:
+    return wykres.uruchom(_PROLOG, kod, czekaj, BladUkladu)
 
 
-def stan() -> dict:
+def stan() -> Json:
     """Jaki jest układ okna, ile jest wykresów i co na nich stoi.
 
     `paneli_w_wykresie` liczy panele wewnątrz aktywnego wykresu: pierwszy to
     cena, kolejne to wskaźniki w osobnych oknach (RSI, MACD).
     """
-    w = _u("""var o={uklad:String(wv(api.layout())||''), nazwa:String(wv(api.layoutName())||''),
+    w: Json = _u("""var o={uklad:String(wv(api.layout())||''), nazwa:String(wv(api.layoutName())||''),
       wykresow:wv(api.chartsCount()), aktywny:wv(api.activeChartIndex())};
     var cw=api._activeChartWidgetWV.value(), c=cw._chartWidget||cw;
     try{ o.paneli_w_wykresie=c.paneWidgets().length; }catch(e){ o.paneli_w_wykresie=null; }
     try{ o.niezapisane_zmiany=!!wv(api._saveChartService.hasChanges()); }catch(e){ o.niezapisane_zmiany=null; }
     return o;""")
-    w["uklad_opis"] = UKLADY.get(w.get("uklad"), "nieznany")
+    w["uklad_opis"] = UKLADY.get(w.get("uklad") or "", "nieznany")
 
     # Co stoi na poszczególnych wykresach czytamy przez przełączanie aktywnego
     # i odczyt stanu. `_chartWidgets` jest obiektem bez długości i bez kluczy
@@ -89,7 +89,7 @@ def stan() -> dict:
     return w
 
 
-def ustaw(kod: str = "s") -> dict:
+def ustaw(kod: str = "s") -> Json:
     """Dzieli okno na wykresy według kodu układu z `UKLADY`.
 
     Zmienia to, co widzi użytkownik. Zwracamy `zgodny`, bo TradingView
@@ -105,13 +105,16 @@ def ustaw(kod: str = "s") -> dict:
             "uwaga": "układ okna zmieniony — wróć przez vgm_uklad_ustaw z kodem s"}
 
 
-def wybierz(indeks: int = 0) -> dict:
+def wybierz(indeks: int = 0) -> Json:
     """Ustawia, który z wykresów w układzie jest aktywny.
 
     Wszystkie narzędzia wykresu działają na aktywnym, więc to jest przełącznik
     dla `vgm_wykres_symbol`, `vgm_wskaznik_dodaj` i pozostałych.
     """
-    i = int(indeks)
+    try:
+        i = wal.calkowita(indeks, "indeks", 0, 8)
+    except wal.BladWejscia as e:
+        raise BladUkladu(str(e)) from e
     s = stan()
     ile = s.get("wykresow") or 1
     if not 0 <= i < ile:
@@ -122,12 +125,18 @@ def wybierz(indeks: int = 0) -> dict:
     return {**p, "zgodny": p.get("aktywny") == i}
 
 
-def symbol_w_wykresie(indeks: int, symbol: str, interwal: str | None = None) -> dict:
+def symbol_w_wykresie(indeks: int, symbol: str, interwal: str | None = None) -> Json:
     """Ustawia instrument na wybranym wykresie układu, nie na aktywnym.
 
     Robi to przez chwilowe przełączenie aktywnego wykresu, więc po wywołaniu
     aktywny zostaje ten, który zmieniliśmy.
     """
+    try:    # zanim wybierz() przestawi aktywny wykres użytkownika
+        wal.symbol(symbol)
+        if interwal:
+            wal.interwal(interwal)
+    except wal.BladWejscia as e:
+        raise BladUkladu(str(e)) from e
     wybierz(indeks)
     if interwal:
         wykres.przelacz(symbol, interwal)

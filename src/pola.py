@@ -106,7 +106,7 @@ INTERWALY = ["1", "5", "15", "30", "60", "120", "240", "1W", "1M"]
 INTERWALY_PEWNE = ["1", "5", "15", "60", "240", "1W"]
 
 
-def _sprawdz():
+def _sprawdz() -> int:
     """Odpytuje wszystkie pola i mówi, które przestały działać."""
     import sys
     from pathlib import Path

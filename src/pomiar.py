@@ -21,19 +21,26 @@ from __future__ import annotations
 
 import random
 import statistics
-import time
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from typy import Json, Swieca  # noqa: E402
 
 
 class BladPomiaru(Exception):
     """Za mało danych albo błędne ustawienia pomiaru."""
 
 
-def _wynik_po(swiece: list, wejscia: list[int], po_ilu: int,
-              spread_proc: float) -> dict:
+def _spelnia(wartosc: float, prog: float, kierunek: str) -> bool:
+    """Czy wartość wskaźnika spełnia warunek `ponizej` / `powyzej` progu."""
+    return ((kierunek == "ponizej" and wartosc < prog)
+            or (kierunek == "powyzej" and wartosc > prog))
+
+
+def _wynik_po(swiece: list[Swieca], wejscia: list[int], po_ilu: int,
+              spread_proc: float) -> Json:
     """Co się działo po każdym wejściu, licząc w procentach ceny wejścia."""
     # Sygnał liczymy z zamknięcia świecy i, ale wejść realnie można dopiero
     # na otwarciu i+1. Zmierzone: wejście po zamknięciu i zawyżało zwrot
@@ -65,7 +72,9 @@ def _wynik_po(swiece: list, wejscia: list[int], po_ilu: int,
     }
 
 
-def _losuj_probe(swiece, wejscia, od, do, rng, kw=None):
+def _losuj_probe(swiece: list[Swieca], wejscia: list[int], od: int, do: int,
+                 rng: random.Random,
+                 kw: list[int | None] | None = None) -> tuple[list[int], bool]:
     """Losowa próba wejść o tej samej liczności co `wejscia`, z zakresu [od, do).
 
     Z `kw` (kwintyle zmienności) losuje z tych samych kwintyli i w tych samych
@@ -73,21 +82,26 @@ def _losuj_probe(swiece, wejscia, od, do, rng, kw=None):
     świec, wraca do zwykłego losowania i mówi o tym drugą wartością.
     """
     pula = list(range(max(od, 25), max(od + 1, do)))
+    if not pula:
+        return [], False
     n = min(len(wejscia), max(1, len(pula) - 1))
     if kw:
-        wg_kw, potrzeba = {}, {}
+        wg_kw: dict[int, list[int]] = {}
+        potrzeba: dict[int, int] = {}
         for i in pula:
-            if kw[i] is not None:
-                wg_kw.setdefault(kw[i], []).append(i)
+            kwi = kw[i]
+            if kwi is not None:
+                wg_kw.setdefault(kwi, []).append(i)
         for i in wejscia:
-            if kw[i] is not None:
-                potrzeba[kw[i]] = potrzeba.get(kw[i], 0) + 1
+            kwi = kw[i]
+            if kwi is not None:
+                potrzeba[kwi] = potrzeba.get(kwi, 0) + 1
         if potrzeba and all(len(wg_kw.get(k, [])) > c for k, c in potrzeba.items()):
             return [j for k, c in potrzeba.items() for j in rng.sample(wg_kw[k], c)], True
     return rng.sample(pula, n), False
 
 
-def _kwintyle_zmiennosci(swiece):
+def _kwintyle_zmiennosci(swiece: list[Swieca]) -> list[int | None]:
     """Numer kwintyla ATR_proc (0-4) dla każdej świecy; None bez wartości."""
     atr = _policz("ATR_proc", swiece)
     znane = sorted(v for v in atr if v is not None)
@@ -97,8 +111,9 @@ def _kwintyle_zmiennosci(swiece):
     return [None if v is None else sum(1 for pr in progi if v >= pr) for v in atr]
 
 
-def _placebo_dla(swiece, wejscia, od, do, po_ilu, spread_proc, rng, losowan,
-                 blokowe=True):
+def _placebo_dla(swiece: list[Swieca], wejscia: list[int], od: int, do: int,
+                 po_ilu: int, spread_proc: float, rng: random.Random, losowan: int,
+                 blokowe: bool = True) -> Json:
     """Placebo, odchylenie i z-score dla wejść ograniczonych do zakresu świec.
 
     Używane osobno dla każdej połowy okresu. Zgodność ZNAKU PRZEWAGI w obu
@@ -115,7 +130,8 @@ def _placebo_dla(swiece, wejscia, od, do, po_ilu, spread_proc, rng, losowan,
     if not w.get("wejsc"):
         return {"wejsc": 0}
     kw = _kwintyle_zmiennosci(swiece) if blokowe else None
-    losowe, blokowo = [], False
+    losowe: list[float] = []
+    blokowo = False
     for _ in range(losowan):
         prob, blokowo = _losuj_probe(swiece, wejscia, od, do - po_ilu - 1, rng, kw)
         r = _wynik_po(swiece, prob, po_ilu, spread_proc)
@@ -130,39 +146,20 @@ def _placebo_dla(swiece, wejscia, od, do, po_ilu, spread_proc, rng, losowan,
             "z": round(prz / od_, 2) if od_ else None, "placebo_blokowe": blokowo}
 
 
-def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
-                po_ilu: int = 10, ile_swiec: int = 0,
-                spread_proc: float = 0.02, losowan: int = 50, seed: int = 42) -> dict:
-    """Czy przekroczenie progu przez wskaźnik cokolwiek zapowiada.
+def _sprawdz_kierunek(kierunek: str) -> None:
+    if kierunek not in ("ponizej", "powyzej"):
+        raise BladPomiaru(f"nieznany kierunek: {kierunek} — dostępne: ponizej, powyzej")
 
-    pole:        na razie tylko "RSI" — liczony na świecach z wykresu
-    prog:        wartość graniczna
-    kierunek:    "ponizej" albo "powyzej"
-    po_ilu:      ile świec po wejściu sprawdzamy wynik
-    spread_proc: koszt wejścia w procentach ceny
-    losowan:     ile powtórzeń placebo
+
+def _porownanie_z_placebo(swiece: list[Swieca], wejscia: list[int], od: int,
+                          po_ilu: int, spread_proc: float, losowan: int,
+                          seed: int) -> Json:
+    """Wynik wejść na tle placebo: cały okres, obie połowy, z-score i wniosek.
+
+    `od` to pierwsza świeca, z której losowane jest placebo całego okresu.
+    Wspólne dla `zmierz_prog` i `zmierz` — kolejność losowań (seed, seed + 1)
+    musi zostać taka, jak była, żeby ten sam seed dawał ten sam wynik.
     """
-    import analiza
-
-    swiece = analiza._swiece_z_wykresu(ile_swiec)
-    if len(swiece) < 60:
-        raise BladPomiaru(f"za mało świec: {len(swiece)}, potrzeba co najmniej 60")
-
-    zamkniecia = [s["zamkniecie"] for s in swiece]
-    rsi = _rsi(zamkniecia, 14)
-
-    wejscia = []
-    for i in range(15, len(swiece) - po_ilu):
-        w = rsi[i]
-        if w is None:
-            continue
-        if (kierunek == "ponizej" and w < prog) or (kierunek == "powyzej" and w > prog):
-            wejscia.append(i)
-
-    if not wejscia:
-        return {"wejsc": 0,
-                "uwaga": f"warunek {pole} {kierunek} {prog} nie wystąpił ani razu"}
-
     polowa = len(swiece) // 2
     prawdziwy = _wynik_po(swiece, wejscia, po_ilu, spread_proc)
     rng_pol = random.Random(seed + 1)
@@ -175,9 +172,10 @@ def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
     # seed jawny: bez niego dwa uruchomienia dawały różne placebo i różne wnioski
     rng = random.Random(seed)
     kw = _kwintyle_zmiennosci(swiece)
-    losowe, blokowo = [], False
+    losowe: list[float] = []
+    blokowo = False
     for _ in range(losowan):
-        prob, blokowo = _losuj_probe(swiece, wejscia, 15, len(swiece) - po_ilu, rng, kw)
+        prob, blokowo = _losuj_probe(swiece, wejscia, od, len(swiece) - po_ilu, rng, kw)
         w = _wynik_po(swiece, prob, po_ilu, spread_proc)
         if w.get("wejsc"):
             losowe.append(w["sredni_zwrot_proc"])
@@ -193,16 +191,12 @@ def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
     odch_placebo = round(statistics.pstdev(losowe), 4) if len(losowe) > 1 else None
     z = None
     percentyl = None
-    if odch_placebo and prawdziwy.get("wejsc"):
+    if odch_placebo and placebo is not None and prawdziwy.get("wejsc"):
         z = round((prawdziwy["sredni_zwrot_proc"] - placebo) / odch_placebo, 2)
         percentyl = round(sum(1 for x in losowe if x < prawdziwy["sredni_zwrot_proc"])
                           / len(losowe) * 100, 1)
 
     return {
-        "warunek": f"{pole} {kierunek} {prog}",
-        "swiec": len(swiece),
-        "sprawdzane_po": f"{po_ilu} świecach",
-        "spread_odjety_proc": spread_proc,
         "caly_okres": prawdziwy,
         "pierwsza_polowa": pierwsza,
         "druga_polowa": druga,
@@ -217,7 +211,45 @@ def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
     }
 
 
-def _wniosek(prawdziwy, placebo, przewaga, pierwsza, druga, z=None) -> str:
+def zmierz_prog(pole: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
+                po_ilu: int = 10, ile_swiec: int = 0,
+                spread_proc: float = 0.02, losowan: int = 50, seed: int = 42) -> Json:
+    """Czy przekroczenie progu przez wskaźnik cokolwiek zapowiada.
+
+    pole:        na razie tylko "RSI" — liczony na świecach z wykresu
+    prog:        wartość graniczna
+    kierunek:    "ponizej" albo "powyzej"
+    po_ilu:      ile świec po wejściu sprawdzamy wynik
+    spread_proc: koszt wejścia w procentach ceny
+    losowan:     ile powtórzeń placebo
+    """
+    import analiza
+
+    _sprawdz_kierunek(kierunek)
+    swiece = analiza._swiece_z_wykresu(ile_swiec)
+    if len(swiece) < 60:
+        raise BladPomiaru(f"za mało świec: {len(swiece)}, potrzeba co najmniej 60")
+
+    zamkniecia = [s["zamkniecie"] for s in swiece]
+    rsi = _rsi(zamkniecia, 14)
+
+    wejscia = _wszystkie_wejscia(rsi, prog, kierunek, 15, len(swiece) - po_ilu)
+
+    if not wejscia:
+        return {"wejsc": 0,
+                "uwaga": f"warunek {pole} {kierunek} {prog} nie wystąpił ani razu"}
+
+    return {
+        "warunek": f"{pole} {kierunek} {prog}",
+        "swiec": len(swiece),
+        "sprawdzane_po": f"{po_ilu} świecach",
+        "spread_odjety_proc": spread_proc,
+        **_porownanie_z_placebo(swiece, wejscia, 15, po_ilu, spread_proc, losowan, seed),
+    }
+
+
+def _wniosek(prawdziwy: Json, placebo: float | None, przewaga: float | None,
+             pierwsza: Json, druga: Json, z: float | None = None) -> str:
     """Jedno zdanie o tym, co z pomiaru wynika. Bez upiększania."""
     if not prawdziwy.get("wejsc"):
         return "brak wejść — nie ma czego mierzyć"
@@ -260,13 +292,27 @@ def _wniosek(prawdziwy, placebo, przewaga, pierwsza, druga, z=None) -> str:
             f"({pa} pp i {pb} pp) przy {prawdziwy['wejsc']} wejściach")
 
 
+def _wszystkie_wejscia(wartosci: list[float | None], prog: float, kierunek: str,
+                       od: int, do: int) -> list[int]:
+    """Każda świeca z `od` do `do` (bez `do`), na której warunek jest spełniony."""
+    wejscia: list[int] = []
+    for i in range(od, do):
+        w = wartosci[i]
+        if w is None:
+            continue
+        if _spelnia(w, prog, kierunek):
+            wejscia.append(i)
+    return wejscia
+
+
 def _rsi(ceny: list[float], okres: int = 14) -> list[float | None]:
     """RSI liczony u nas, żeby dało się go policzyć dla każdej świecy wstecz."""
     wynik: list[float | None] = [None] * len(ceny)
     if len(ceny) < okres + 1:
         return wynik
 
-    zyski, straty = [], []
+    zyski: list[float] = []
+    straty: list[float] = []
     for i in range(1, len(ceny)):
         r = ceny[i] - ceny[i - 1]
         zyski.append(max(r, 0))
@@ -284,7 +330,7 @@ def _rsi(ceny: list[float], okres: int = 14) -> list[float | None]:
 
 def porownaj_progi(progi: list[float] | None = None, kierunek: str = "ponizej",
                    po_ilu: int = 10, ile_swiec: int = 0,
-                   spread_proc: float = 0.02) -> dict:
+                   spread_proc: float = 0.02) -> Json:
     """Ten sam pomiar na kilku progach naraz — który daje dość wejść i przewagę.
 
     Luźniejszy próg daje więcej wejść, ale słabszy sygnał. Ostrzejszy odwrotnie.
@@ -332,16 +378,16 @@ def porownaj_progi(progi: list[float] | None = None, kierunek: str = "ponizej",
 
 
 # ── wskaźniki liczone u nas, żeby dało się je policzyć dla każdej świecy ──
-def _sma(ceny, okres):
-    w = [None] * len(ceny)
+def _sma(ceny: list[float], okres: int) -> list[float | None]:
+    w: list[float | None] = [None] * len(ceny)
     for i in range(okres - 1, len(ceny)):
         w[i] = sum(ceny[i - okres + 1:i + 1]) / okres
     return w
 
 
-def _atr(swiece, okres=14):
-    """Średni zasięg z uwzględnieniem luk między świecami."""
-    zasiegi = []
+def _prawdziwy_zasieg(swiece: list[Swieca]) -> list[float]:
+    """Zasięg każdej świecy z uwzględnieniem luki do poprzedniego zamknięcia."""
+    zasiegi: list[float] = []
     for i, s in enumerate(swiece):
         if i == 0:
             zasiegi.append(s["szczyt"] - s["dolek"])
@@ -350,46 +396,50 @@ def _atr(swiece, okres=14):
         zasiegi.append(max(s["szczyt"] - s["dolek"],
                            abs(s["szczyt"] - poprz),
                            abs(s["dolek"] - poprz)))
-    return _sma(zasiegi, okres)
+    return zasiegi
 
 
-def _bollinger(ceny, okres=20, odchylen=2.0):
+def _atr(swiece: list[Swieca], okres: int = 14) -> list[float | None]:
+    """Średni zasięg z uwzględnieniem luk między świecami."""
+    return _sma(_prawdziwy_zasieg(swiece), okres)
+
+
+def _bollinger(ceny: list[float], okres: int = 20,
+               odchylen: float = 2.0) -> list[float | None]:
     """Zwraca położenie ceny w kanale: 0 to dolna wstęga, 100 to górna."""
     srodek = _sma(ceny, okres)
-    w = [None] * len(ceny)
+    w: list[float | None] = [None] * len(ceny)
     for i in range(okres - 1, len(ceny)):
         wycinek = ceny[i - okres + 1:i + 1]
         sr = srodek[i]
+        assert sr is not None  # _sma ma wartość od okres - 1
         odch = (sum((x - sr) ** 2 for x in wycinek) / okres) ** 0.5
         gora, dol = sr + odchylen * odch, sr - odchylen * odch
         w[i] = None if gora == dol else (ceny[i] - dol) / (gora - dol) * 100
     return w
 
 
-def _adx(swiece, okres=14):
+def _adx(swiece: list[Swieca], okres: int = 14) -> list[float | None]:
     """Siła ruchu kierunkowego z wygładzaniem Wildera, jak w TradingView.
 
     Zmierzone przed poprawką: sumy proste dawały 48,89 tam, gdzie TradingView
     pokazywał 25,71 — 23 punkty różnicy, więc progi 30/15 nie znaczyły nic.
     Wartość na pozycji i jest ADX ze świecy i, bez przesunięcia.
     """
-    w = [None] * len(swiece)
+    w: list[float | None] = [None] * len(swiece)
     if len(swiece) < okres * 2 + 1:
         return w
 
-    plus, minus, tr = [0.0], [0.0], [swiece[0]["szczyt"] - swiece[0]["dolek"]]
+    plus, minus = [0.0], [0.0]
+    tr = _prawdziwy_zasieg(swiece)
     for i in range(1, len(swiece)):
         gora = swiece[i]["szczyt"] - swiece[i - 1]["szczyt"]
         dol = swiece[i - 1]["dolek"] - swiece[i]["dolek"]
         plus.append(gora if gora > dol and gora > 0 else 0.0)
         minus.append(dol if dol > gora and dol > 0 else 0.0)
-        poprz = swiece[i - 1]["zamkniecie"]
-        tr.append(max(swiece[i]["szczyt"] - swiece[i]["dolek"],
-                      abs(swiece[i]["szczyt"] - poprz),
-                      abs(swiece[i]["dolek"] - poprz)))
 
-    def wilder(seria):
-        out = [None] * len(seria)
+    def wilder(seria: list[float]) -> list[float | None]:
+        out: list[float | None] = [None] * len(seria)
         if len(seria) <= okres:
             return out
         s = sum(seria[1:okres + 1])
@@ -400,12 +450,14 @@ def _adx(swiece, okres=14):
         return out
 
     s_tr, s_plus, s_minus = wilder(tr), wilder(plus), wilder(minus)
-    dx = [None] * len(swiece)
+    dx: list[float | None] = [None] * len(swiece)
     for i in range(okres, len(swiece)):
-        if s_tr[i] is None or not s_tr[i]:
+        str_i, sp_i, sm_i = s_tr[i], s_plus[i], s_minus[i]
+        if str_i is None or not str_i:
             continue
-        dp = s_plus[i] / s_tr[i] * 100
-        dm = s_minus[i] / s_tr[i] * 100
+        assert sp_i is not None and sm_i is not None  # wilder wypełnia od okres
+        dp = sp_i / str_i * 100
+        dm = sm_i / str_i * 100
         dx[i] = 0.0 if dp + dm == 0 else abs(dp - dm) / (dp + dm) * 100
 
     pierwszy = 2 * okres
@@ -415,9 +467,10 @@ def _adx(swiece, okres=14):
     adx = sum(ok[-okres:]) / okres
     w[pierwszy] = adx
     for i in range(pierwszy + 1, len(swiece)):
-        if dx[i] is None:
+        dxi = dx[i]
+        if dxi is None:
             continue
-        adx = (adx * (okres - 1) + dx[i]) / okres
+        adx = (adx * (okres - 1) + dxi) / okres
         w[i] = adx
     return w
 
@@ -430,7 +483,7 @@ WSKAZNIKI = {
 }
 
 
-def _policz(nazwa: str, swiece: list) -> list:
+def _policz(nazwa: str, swiece: list[Swieca]) -> list[float | None]:
     zamkniecia = [s["zamkniecie"] for s in swiece]
     if nazwa == "RSI":
         return _rsi(zamkniecia, 14)
@@ -447,13 +500,14 @@ def _policz(nazwa: str, swiece: list) -> list:
 
 def zmierz(wskaznik: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
            po_ilu: int = 10, ile_swiec: int = 0,
-           spread_proc: float = 0.02, losowan: int = 50, seed: int = 42) -> dict:
+           spread_proc: float = 0.02, losowan: int = 50, seed: int = 42) -> Json:
     """To samo co zmierz_prog, ale dla dowolnego z czterech wskaźników.
 
     Dostępne: RSI, Bollinger (położenie w kanale), ADX, ATR_proc.
     """
     import analiza
 
+    _sprawdz_kierunek(kierunek)
     swiece = analiza._swiece_z_wykresu(ile_swiec)
     if len(swiece) < 60:
         raise BladPomiaru(f"za mało świec: {len(swiece)}, potrzeba co najmniej 60")
@@ -464,12 +518,13 @@ def zmierz(wskaznik: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
     # Epizody, nie sąsiednie świece: po wejściu czekamy do wyjścia, zanim
     # policzymy następne. Bez tego wejście na świecy 30 i 31 liczyło się jako
     # dwie niezależne próby, a próg dwudziestu wejść przechodził na powtórkach.
-    wejscia, wolne_od, sygnalow = [], 0, 0
+    wejscia: list[int] = []
+    wolne_od, sygnalow = 0, 0
     for i in range(od, len(swiece) - po_ilu - 1):
         w = wartosci[i]
         if w is None:
             continue
-        if (kierunek == "ponizej" and w < prog) or (kierunek == "powyzej" and w > prog):
+        if _spelnia(w, prog, kierunek):
             sygnalow += 1
             if i >= wolne_od:
                 wejscia.append(i)
@@ -479,40 +534,6 @@ def zmierz(wskaznik: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
         return {"wejsc": 0,
                 "uwaga": f"warunek {wskaznik} {kierunek} {prog} nie wystąpił ani razu"}
 
-    polowa = len(swiece) // 2
-    prawdziwy = _wynik_po(swiece, wejscia, po_ilu, spread_proc)
-    rng_pol = random.Random(seed + 1)
-    pierwsza = _placebo_dla(swiece, [i for i in wejscia if i < polowa], 0, polowa,
-                            po_ilu, spread_proc, rng_pol, losowan)
-    druga = _placebo_dla(swiece, [i for i in wejscia if i >= polowa], polowa, len(swiece),
-                         po_ilu, spread_proc, rng_pol, losowan)
-
-    # seed jawny: bez niego dwa uruchomienia dawały różne placebo i różne wnioski
-    rng = random.Random(seed)
-    kw = _kwintyle_zmiennosci(swiece)
-    losowe, blokowo = [], False
-    for _ in range(losowan):
-        prob, blokowo = _losuj_probe(swiece, wejscia, od, len(swiece) - po_ilu, rng, kw)
-        w = _wynik_po(swiece, prob, po_ilu, spread_proc)
-        if w.get("wejsc"):
-            losowe.append(w["sredni_zwrot_proc"])
-
-    placebo = round(statistics.mean(losowe), 4) if losowe else None
-    przewaga = (round(prawdziwy["sredni_zwrot_proc"] - placebo, 4)
-                if placebo is not None and prawdziwy.get("wejsc") else None)
-
-    # Miara niepewności: sama przewaga nad średnią placebo nic nie mówi, gdy
-    # losowania rozrzucają się szerzej niż ta przewaga. z-score pokazuje,
-    # ile odchyleń placebo dzieli prawdziwy wynik od losowego. Poniżej 1
-    # to szum; percentyl mówi, jaka część losowań była gorsza od prawdziwego.
-    odch_placebo = round(statistics.pstdev(losowe), 4) if len(losowe) > 1 else None
-    z = None
-    percentyl = None
-    if odch_placebo and prawdziwy.get("wejsc"):
-        z = round((prawdziwy["sredni_zwrot_proc"] - placebo) / odch_placebo, 2)
-        percentyl = round(sum(1 for x in losowe if x < prawdziwy["sredni_zwrot_proc"])
-                          / len(losowe) * 100, 1)
-
     return {
         "warunek": f"{wskaznik} {kierunek} {prog}",
         "opis_wskaznika": WSKAZNIKI.get(wskaznik, ""),
@@ -521,22 +542,12 @@ def zmierz(wskaznik: str = "RSI", prog: float = 30, kierunek: str = "ponizej",
         "swiec": len(swiece),
         "sprawdzane_po": f"{po_ilu} świecach",
         "spread_odjety_proc": spread_proc,
-        "caly_okres": prawdziwy,
-        "pierwsza_polowa": pierwsza,
-        "druga_polowa": druga,
-        "placebo_sredni_zwrot": placebo,
-        "placebo_odchylenie": odch_placebo,
-        "placebo_blokowe": blokowo,
-        "przewaga_nad_placebo": przewaga,
-        "z_score": z,
-        "percentyl_wobec_placebo": percentyl,
-        "losowan": len(losowe),
-        "wniosek": _wniosek(prawdziwy, placebo, przewaga, pierwsza, druga, z),
+        **_porownanie_z_placebo(swiece, wejscia, od, po_ilu, spread_proc, losowan, seed),
     }
 
 
 def przeglad_wskaznikow(po_ilu: int = 10, ile_swiec: int = 0,
-                        spread_proc: float = 0.02) -> dict:
+                        spread_proc: float = 0.02) -> Json:
     """Wszystkie cztery wskaźniki, sensowne progi, jeden przebieg.
 
     Odpowiada na pytanie: czy KTÓRYKOLWIEK z nich cokolwiek zapowiada
@@ -580,8 +591,8 @@ def przeglad_wskaznikow(po_ilu: int = 10, ile_swiec: int = 0,
     }
 
 
-def przeglad_instrumentow(instrumenty: list | None = None,
-                          po_ilu: int = 10, spread_proc: float = 0.02) -> dict:
+def przeglad_instrumentow(instrumenty: list[tuple[str, str]] | None = None,
+                          po_ilu: int = 10, spread_proc: float = 0.02) -> Json:
     """Ten sam przegląd na kilku instrumentach i przedziałach.
 
     Wynik z jednego wykresu to jeden pomiar. Dopiero powtórzenie na innym
@@ -643,7 +654,7 @@ def przeglad_instrumentow(instrumenty: list | None = None,
     }
 
 
-def _najlepszy(wiersze: list) -> dict | None:
+def _najlepszy(wiersze: list[Json]) -> Json | None:
     """Wiersz z najwyższym zwrotem — nawet gdy nie przeszedł, warto go widzieć."""
     z_wynikiem = [w for w in wiersze if w.get("zwrot_proc") is not None]
     if not z_wynikiem:
@@ -654,7 +665,7 @@ def _najlepszy(wiersze: list) -> dict | None:
 
 
 def odniesienie_trzymanie(po_ilu: int = 10, ile_swiec: int = 0,
-                          spread_proc: float = 0.02) -> dict:
+                          spread_proc: float = 0.02) -> Json:
     """Ile daje samo trzymanie przez N świec, bez żadnego sygnału.
 
     To uczciwszy punkt odniesienia niż losowe wejście: mówi, ile zarobiłby
@@ -670,7 +681,7 @@ def odniesienie_trzymanie(po_ilu: int = 10, ile_swiec: int = 0,
 
 def czy_sygnal_czy_trend(wskaznik: str = "Bollinger", prog: float = 90,
                          kierunek: str = "powyzej", po_ilu: int = 10,
-                         ile_swiec: int = 0, spread_proc: float = 0.02) -> dict:
+                         ile_swiec: int = 0, spread_proc: float = 0.02) -> Json:
     """Rozstrzyga, czy warunek naprawdę coś wnosi, czy tylko łapie trend.
 
     Porównuje cztery liczby: warunek, warunek odwrotny, samo trzymanie
@@ -678,7 +689,7 @@ def czy_sygnal_czy_trend(wskaznik: str = "Bollinger", prog: float = 90,
     wypada gorzej. Sam trend daje podobny wynik niezależnie od warunku.
     """
     odwrotny = "ponizej" if kierunek == "powyzej" else "powyzej"
-    prog_odwrotny = 100 - prog if wskaznik == "Bollinger" else prog
+    prog_odwrotny = 100 - prog if wskaznik in ("Bollinger", "RSI") else prog
 
     w = zmierz(wskaznik, prog, kierunek, po_ilu, ile_swiec, spread_proc)
     o = zmierz(wskaznik, prog_odwrotny, odwrotny, po_ilu, ile_swiec, spread_proc)
@@ -720,7 +731,7 @@ def czy_sygnal_czy_trend(wskaznik: str = "Bollinger", prog: float = 90,
 def jak_dlugo_trzymac(wskaznik: str = "Bollinger", prog: float = 90,
                       kierunek: str = "powyzej",
                       dlugosci: list[int] | None = None,
-                      ile_swiec: int = 0, spread_proc: float = 0.02) -> dict:
+                      ile_swiec: int = 0, spread_proc: float = 0.02) -> Json:
     """Po ilu świecach sygnał daje najwięcej ponad samo trzymanie.
 
     Zmierzone: ten sam warunek potrafi działać odwrotnie na krótkim terminie
@@ -757,7 +768,7 @@ def jak_dlugo_trzymac(wskaznik: str = "Bollinger", prog: float = 90,
                  if dzialajace else None)
     najkrotszy = min((w["po_swiecach"] for w in dzialajace), default=None)
 
-    if not dzialajace:
+    if najlepszy is None:
         wniosek = "warunek nie bije trzymania na żadnej z badanych długości"
     else:
         wniosek = (
@@ -784,7 +795,7 @@ def jak_dlugo_trzymac(wskaznik: str = "Bollinger", prog: float = 90,
 def koszt_a_przewaga(wskaznik: str = "Bollinger", prog: float = 90,
                      kierunek: str = "powyzej", po_ilu: int = 40,
                      ile_swiec: int = 0,
-                     koszty: list[float] | None = None) -> dict:
+                     koszty: list[float] | None = None) -> Json:
     """Przy jakim koszcie transakcji sygnał przestaje mieć sens.
 
     Uwaga na pułapkę, w którą sam wpadłem: nie wystarczy odjąć spread od obu
@@ -805,13 +816,7 @@ def koszt_a_przewaga(wskaznik: str = "Bollinger", prog: float = 90,
     wartosci = _policz(wskaznik, swiece)
     od = 25
 
-    wejscia = []
-    for i in range(od, len(swiece) - po_ilu):
-        w = wartosci[i]
-        if w is None:
-            continue
-        if (kierunek == "ponizej" and w < prog) or (kierunek == "powyzej" and w > prog):
-            wejscia.append(i)
+    wejscia = _wszystkie_wejscia(wartosci, prog, kierunek, od, len(swiece) - po_ilu)
 
     if not wejscia:
         return {"wejsc": 0, "uwaga": "warunek nie wystąpił ani razu"}
@@ -872,7 +877,7 @@ def koszt_a_przewaga(wskaznik: str = "Bollinger", prog: float = 90,
     }
 
 
-def _demo():
+def _demo() -> None:
     print("Pomiar: czy RSI poniżej 30 cokolwiek zapowiada\n")
     w = zmierz_prog("RSI", 30, "ponizej", po_ilu=10)
     for k, v in w.items():
@@ -884,14 +889,16 @@ def _demo():
             print(f"  {k:24} {v}")
 
 
-def _wejscia_dla(wartosci, prog, kierunek, od, do, po_ilu):
+def _wejscia_dla(wartosci: list[float | None], prog: float, kierunek: str,
+                 od: int, do: int, po_ilu: int) -> list[int]:
     """Epizody bez nakładania w zakresie [od, do)."""
-    wejscia, wolne_od = [], 0
+    wejscia: list[int] = []
+    wolne_od = 0
     for i in range(max(od, 25), min(do, len(wartosci)) - po_ilu - 1):
         w = wartosci[i]
         if w is None:
             continue
-        if (kierunek == "ponizej" and w < prog) or (kierunek == "powyzej" and w > prog):
+        if _spelnia(w, prog, kierunek):
             if i >= wolne_od:
                 wejscia.append(i)
                 wolne_od = i + 1 + po_ilu
@@ -899,10 +906,10 @@ def _wejscia_dla(wartosci, prog, kierunek, od, do, po_ilu):
 
 
 def walk_forward(wskaznik: str = "RSI", kierunek: str = "ponizej",
-                 progi: list | None = None, po_ilu: int = 10,
+                 progi: list[float] | None = None, po_ilu: int = 10,
                  ile_swiec: int = 0, czesc_ucz: float = 0.7,
                  spread_proc: float = 0.0, losowan: int = 50, seed: int = 42,
-                 swiece: list | None = None) -> dict:
+                 swiece: list[Swieca] | None = None) -> Json:
     """Jedyny pomiar poza próbą: próg wybrany na części uczącej, sprawdzony na testowej.
 
     Wszystko wcześniej mierzyło w próbie — próg i wynik z tych samych świec,
