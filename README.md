@@ -132,6 +132,10 @@ zostało sprawdzonych dla danych publicznych (`vgm_pola` zwraca je w polu
 
 ## Narzędzia
 
+Pełny opis API każdego narzędzia — tabela wejścia zgodna ze schematem,
+klucze wyjścia z kodu, przykład wywołania i błędy — jest w
+[docs/NARZEDZIA.md](docs/NARZEDZIA.md). Poniżej skrót.
+
 Parametry oznaczone **(wym.)** są wymagane. Wartości domyślne podano po `=`.
 
 ### Odczyt (6 narzędzi)
@@ -1038,7 +1042,8 @@ Testy z katalogu `tests/` działają **bez sieci, bez przeglądarki i bez konta*
 pakiet `mcp` jest w nich podmieniany atrapą, a każda próba otwarcia połączenia
 kończy test błędem. Wyjątkiem jest `tests/test_prawdziwe_mcp.py`: importuje
 `src/serwer.py` w osobnym procesie z prawdziwym, zainstalowanym `mcp` i nie przejdzie
-na mcp 2.x.
+na mcp 2.x. `tests/test_dokumentacja.py` pilnuje, żeby każde zarejestrowane narzędzie
+miało sekcję w `docs/NARZEDZIA.md` (i odwrotnie), z parametrami zgodnymi ze schematem.
 
 ```bash
 pip install -r requirements-dev.txt   # pytest, mypy, mcp, websocket-client

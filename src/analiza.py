@@ -21,6 +21,7 @@ from typy import Json, Swieca  # noqa: E402
 
 
 def _z_interwalem(nazwa: str, interwal: str | None) -> str:
+    """Nazwa pola z sufiksem `|interwal` albo bez niego, gdy interwał pusty."""
     return f"{nazwa}|{interwal}" if interwal else nazwa
 
 
@@ -350,6 +351,7 @@ def obraz_pelny(symbol: str) -> Json:
 
 
 def _demo() -> None:
+    """Sprawdzenie na żywych danych — uruchom ten plik wprost."""
     print("1. pełny obraz — 91 pól w dziewięciu grupach")
     o = obraz("FX:EURUSD")
     for g, w in o.items():
