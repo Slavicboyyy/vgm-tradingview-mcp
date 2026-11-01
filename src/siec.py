@@ -11,6 +11,7 @@ from __future__ import annotations
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 MAX_ODPOWIEDZI = 5_000_000   # bajtów; największe zmierzone odpowiedzi to setki kB
 HOSTY = ("scanner.tradingview.com", "pine-facade.tradingview.com",
@@ -22,7 +23,8 @@ class BladSieci(Exception):
 
 
 class _BezPrzekierowan(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str,
+                         headers: Any, newurl: str) -> urllib.request.Request | None:
         raise urllib.error.HTTPError(req.full_url, code,
                                      f"przekierowanie do {newurl[:80]} zablokowane",
                                      headers, fp)
@@ -43,7 +45,7 @@ def pobierz(zad: urllib.request.Request, timeout: float, max_bajtow: int = MAX_O
     albo odpowiedź przekracza limit; HTTPError i URLError przechodzą bez zmian."""
     sprawdz_adres(zad.full_url)
     with _OPENER.open(zad, timeout=timeout) as o:
-        dane = o.read(max_bajtow + 1)
+        dane: bytes = o.read(max_bajtow + 1)
     if len(dane) > max_bajtow:
         raise BladSieci(f"odpowiedź większa niż {max_bajtow} bajtów")
     return dane
