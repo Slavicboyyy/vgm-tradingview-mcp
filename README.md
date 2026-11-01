@@ -68,29 +68,34 @@ w wirtualnym środowisku, w `command` podaj ścieżkę do jego `python`):
       "command": "/SCIEZKA/DO/vgm-mcp/.venv/bin/python",
       "args": ["/SCIEZKA/DO/vgm-mcp/src/serwer.py"],
       "env": {
-        "VGM_CDP_PORT": "9222"
+        "VGM_CDP_PORT": "<PORT>",
+        "VGM_KATALOG_PINE": "/SCIEZKA/DO/skryptow-pine"
       }
     }
   }
 }
 ```
 
-Blok `env` jest opcjonalny i potrzebny tylko warstwom wykresu i sesji.
+`<PORT>` zamień na port, z którym uruchamiasz przeglądarkę. Blok `env` jest
+potrzebny tylko warstwom wykresu i sesji (`VGM_CDP_PORT`) oraz narzędziu
+`vgm_pine_sprawdz_plik` (`VGM_KATALOG_PINE`); warstwa danych działa bez niego.
 
-### Zmienna środowiskowa
+### Zmienne środowiskowe
 
-Jedyna zmienna, którą czyta kod, to `VGM_CDP_PORT` – port zdalnego debugowania
-przeglądarki.
+| zmienna | do czego | gdy jej brak |
+|---|---|---|
+| `VGM_CDP_PORT` | port zdalnego debugowania przeglądarki, liczba 1–65535 | narzędzia wykresu i sesji zwracają błąd „brak zmiennej VGM_CDP_PORT"; `vgm_wykres_zdrowie` zwraca `"port": null` i ten powód |
+| `VGM_KATALOG_PINE` | jedyny katalog, z którego `vgm_pine_sprawdz_plik` (i `vgm.py pine`) czyta pliki; ścieżka bezwzględna | odczyt plików jest wyłączony |
+| `VGM_KATALOG_ZRZUTOW` | gdzie `vgm_wykres_zrzut` zapisuje pliki `*.png` | `<tmp>/vgm-mcp` |
 
-- Gdy jest ustawiona, jest używana.
-- Gdy jej brak, kod sprawdza po kolei porty `9333`, `9556`, `9222` i bierze pierwszy,
-  który odpowiada na `http://localhost:<port>/json/version`. Jeśli żaden nie
-  odpowiada, przyjmuje `9222`.
+Port nie ma wartości domyślnej i serwer go nie zgaduje: nie sprawdza po kolei
+żadnych portów, łączy się tylko z `localhost:<VGM_CDP_PORT>`. Zły format portu
+(np. `abc`, `0`, `70000`) daje błąd z nazwą zmiennej.
 
 ### Przeglądarka dla warstwy wykresu i sesji
 
-Uruchom przeglądarkę Chromium z debugowaniem na wybranym porcie, np. z flagą
-`--remote-debugging-port=9222`, otwórz w niej `https://www.tradingview.com/chart/`
+Uruchom przeglądarkę Chromium z debugowaniem na wybranym porcie (flaga
+`--remote-debugging-port=<PORT>`, ten sam port co w `VGM_CDP_PORT`), otwórz w niej `https://www.tradingview.com/chart/`
 i (dla warstwy sesji) zaloguj się na swoje konto. Potem wywołaj `vgm_wykres_zdrowie`,
 żeby sprawdzić, czy serwer widzi kartę.
 
@@ -390,16 +395,19 @@ Przy poprawnym kodzie: `{"poprawny": true, "bledy": []}` (`podglad` jest tylko p
 `ostrzezenia` tylko gdy kompilator je zgłosił). Pusty kod daje błąd z `blad`.
 
 #### `vgm_pine_sprawdz_plik`
-To samo, ale kod czytany z pliku `.pine`/`.txt` z katalogu `VGM_KATALOG_PINE`
-(domyślnie katalog roboczy). Parametry: `sciezka` (wym.).
+To samo, ale kod czytany z pliku `.pine`/`.txt` z katalogu `VGM_KATALOG_PINE`.
+Bez tej zmiennej odczyt jest odrzucony. Ścieżka może być względna wobec tego
+katalogu albo bezwzględna wewnątrz niego; dowiązania są rozwiązywane (liczy się
+cel), czytane są tylko zwykłe pliki do 400 000 bajtów. Parametry: `sciezka` (wym.).
 
 ```json
-{"sciezka": "/SCIEZKA/DO/skrypt.pine"}
+{"sciezka": "skrypt.pine"}
 ```
 ```
-{ "poprawny": true, "bledy": [], "plik": "/SCIEZKA/DO/skrypt.pine" }
+{ "poprawny": true, "bledy": [], "plik": "/SCIEZKA/DO/skryptow-pine/skrypt.pine" }
 ```
-Brak pliku daje `{"blad": "nie ma takiego pliku: ...", "narzedzie": ...}`.
+Brak pliku daje `{"blad": "sciezka: nie ma takiego pliku: ...", "narzedzie": ...}`,
+brak zmiennej — `{"blad": "odczyt plików wyłączony — ustaw VGM_KATALOG_PINE ...", ...}`.
 
 #### `vgm_pine_szkielet`
 Gotowy szkielet wskaźnika Pine v5. Parametry: `nazwa` (= „Nowy wskaźnik"),
@@ -424,10 +432,11 @@ Czy da się sterować wykresem. Bez parametrów.
 {}
 ```
 ```
-{ "port": <int>, "przegladarka": <bool>, "karta_tv": <bool>, "api_wykresu": <bool>,
+{ "port": <int|null>, "przegladarka": <bool>, "karta_tv": <bool>, "api_wykresu": <bool>,
   "gotowy": <bool>, "tytul": "<tytuł karty>", "symbol": "<symbol>" }
 ```
-Gdy się nie da, jest też `"powod": "<tekst>"`.
+Gdy się nie da, jest też `"powod": "<tekst>"`. Bez `VGM_CDP_PORT` odpowiedź ma
+`"port": null` i powód z nazwą zmiennej; serwer nie próbuje wtedy żadnego portu.
 
 #### `vgm_wykres_karta`
 Otwiera kartę z wykresem, jeśli żadna nie jest otwarta. Parametry: `symbol` = FX:EURUSD.
@@ -1013,9 +1022,10 @@ Parametry: `indeks` (wym.), `symbol` (wym.), `interwal` (pominięty = bez zmiany
 Argumenty narzędzi sprawdza `src/walidacja.py` zanim trafią do adresu, ścieżki albo kodu JS.
 Zmienne środowiskowe:
 
-- `VGM_KATALOG_PINE` — skąd wolno czytać pliki dla `vgm_pine_sprawdz_plik` (domyślnie katalog roboczy),
+- `VGM_KATALOG_PINE` — jedyny katalog, z którego `vgm_pine_sprawdz_plik` czyta pliki
+  `*.pine`/`*.txt`; bez tej zmiennej odczyt jest odrzucony,
 - `VGM_KATALOG_ZRZUTOW` — gdzie wolno zapisywać `vgm_wykres_zrzut` (domyślnie `<tmp>/vgm-mcp`), tylko `*.png`,
-- `VGM_CDP_PORT` — port przeglądarki, 1–65535.
+- `VGM_CDP_PORT` — port przeglądarki, 1–65535, bez wartości domyślnej.
 
 Zapytania HTTP idą tylko do hostów TradingView, bez przekierowań, z limitem rozmiaru odpowiedzi.
 Jedno wywołanie narzędzia ma twardy limit 240 s.

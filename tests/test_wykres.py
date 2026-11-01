@@ -33,7 +33,7 @@ class _Odp:
         return self.tresc
 
 
-def test_karta_nie_wybiera_obcej_strony_z_nazwa_w_adresie(monkeypatch):
+def test_karta_nie_wybiera_obcej_strony_z_nazwa_w_adresie(port_cdp, monkeypatch):
     karty = [
         {"type": "page", "url": "https://evil.example/?tradingview.com", "webSocketDebuggerUrl": "ws://zla"},
         {"type": "service_worker", "url": "https://www.tradingview.com/sw.js", "webSocketDebuggerUrl": "ws://sw"},
@@ -45,7 +45,7 @@ def test_karta_nie_wybiera_obcej_strony_z_nazwa_w_adresie(monkeypatch):
     assert wykres._karta()["webSocketDebuggerUrl"] == "ws://dobra"
 
 
-def test_karta_brak_prawdziwej_karty_to_blad(monkeypatch):
+def test_karta_brak_prawdziwej_karty_to_blad(port_cdp, monkeypatch):
     karty = [{"type": "page", "url": "https://evil.example/?tradingview.com"}]
     monkeypatch.setattr(wykres, "websocket", object())
     monkeypatch.setattr(wykres.urllib.request, "urlopen",
@@ -54,7 +54,7 @@ def test_karta_brak_prawdziwej_karty_to_blad(monkeypatch):
         wykres._karta()
 
 
-def test_karta_przegladarka_nie_odpowiada_to_blad_z_limitem_czasu(monkeypatch):
+def test_karta_przegladarka_nie_odpowiada_to_blad_z_limitem_czasu(port_cdp, monkeypatch):
     zapisane = {}
 
     def urlopen(url, timeout=None):
@@ -68,17 +68,83 @@ def test_karta_przegladarka_nie_odpowiada_to_blad_z_limitem_czasu(monkeypatch):
     assert zapisane["timeout"] == 10
 
 
-# ── port ────────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("v", ["abc", "0", "70000", "-1", "9222; rm -rf /", "1.5"])
+# ── port: tylko z VGM_CDP_PORT, bez domyślnych i zgadywanych ────────────
+@pytest.fixture
+def port_cdp(monkeypatch):
+    """Dowolny port ustawiony jawnie — wartość nie ma znaczenia, sieć jest atrapą."""
+    monkeypatch.setenv("VGM_CDP_PORT", "41234")
+    return 41234
+
+
+@pytest.mark.parametrize("v", ["abc", "0", "70000", "-1", "41234; rm -rf /", "1.5", "１２３"])
 def test_zly_port_z_env_odrzucony(v, monkeypatch):
     monkeypatch.setenv("VGM_CDP_PORT", v)
-    with pytest.raises(RuntimeError):
-        wykres._wykryj_port()
+    with pytest.raises(wykres.BladWykresu, match="VGM_CDP_PORT"):
+        wykres._port_cdp()
 
 
-def test_dobry_port_z_env(monkeypatch):
-    monkeypatch.setenv("VGM_CDP_PORT", "9333")
-    assert wykres._wykryj_port() == 9333
+def test_dobry_port_z_env(port_cdp):
+    assert wykres._port_cdp() == port_cdp
+
+
+@pytest.mark.parametrize("v", [None, "", "  "])
+def test_brak_portu_to_czytelny_blad_bez_zgadywania(v, monkeypatch):
+    if v is None:
+        monkeypatch.delenv("VGM_CDP_PORT", raising=False)
+    else:
+        monkeypatch.setenv("VGM_CDP_PORT", v)
+    monkeypatch.setattr(wykres, "websocket", object())
+    monkeypatch.setattr(wykres.urllib.request, "urlopen",
+                        lambda *a, **k: pytest.fail("bez VGM_CDP_PORT nie wolno pytać żadnego portu"))
+    with pytest.raises(wykres.BladWykresu, match="brak zmiennej VGM_CDP_PORT"):
+        wykres._port_cdp()
+    with pytest.raises(wykres.BladWykresu, match="brak zmiennej VGM_CDP_PORT"):
+        wykres._karta()
+    with pytest.raises(wykres.BladWykresu, match="brak zmiennej VGM_CDP_PORT"):
+        wykres.otworz_karte("FX:EURUSD")
+
+
+def test_zdrowie_bez_portu_mowi_czego_brakuje(monkeypatch):
+    monkeypatch.delenv("VGM_CDP_PORT", raising=False)
+    monkeypatch.setattr(wykres.urllib.request, "urlopen",
+                        lambda *a, **k: pytest.fail("bez VGM_CDP_PORT nie wolno pytać żadnego portu"))
+    z = wykres.zdrowie()
+    assert z["port"] is None and z["gotowy"] is False and z["przegladarka"] is False
+    assert "VGM_CDP_PORT" in z["powod"]
+
+
+def test_karta_pyta_tylko_port_z_env(port_cdp, monkeypatch):
+    adresy = []
+
+    def urlopen(url, timeout=None):
+        adresy.append(url)
+        return _Odp(json.dumps([{"type": "page", "url": "https://www.tradingview.com/chart/"}]).encode())
+
+    monkeypatch.setattr(wykres, "websocket", object())
+    monkeypatch.setattr(wykres.urllib.request, "urlopen", urlopen)
+    wykres._karta()
+    assert adresy == [f"http://localhost:{port_cdp}/json"]
+
+
+def test_import_wykresu_nie_pyta_o_port_ani_sieci(tmp_path):
+    """Import nie może łączyć się z siecią ani wymagać VGM_CDP_PORT."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    src = Path(wykres.__file__).resolve().parent
+    kod = ("import socket, sys\n"
+           "def nie(*a, **k): raise SystemExit('import próbował łączyć się z siecią')\n"
+           "socket.create_connection = nie\n"
+           "socket.socket.connect = nie\n"
+           f"sys.path.insert(0, {str(src)!r})\n"
+           "import wykres\n"
+           "assert not hasattr(wykres, 'PORT')\n")
+    env = {k: v for k, v in os.environ.items() if k != "VGM_CDP_PORT"}
+    p = subprocess.run([sys.executable, "-c", kod], cwd=tmp_path, env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr[-1000:]
 
 
 # ── zrzut: zapis tylko w katalogu zrzutów ───────────────────────────────

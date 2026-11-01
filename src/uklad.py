@@ -5,7 +5,7 @@ TradingView potrafi podzielić okno na 2, 3, 4, 6 albo 8 wykresów. Każdy ma
 własny instrument i przedział, więc da się patrzeć na ten sam rynek w kilku
 przedziałach naraz albo porównać kilka instrumentów bez przełączania.
 
-Zmierzone na koncie pro_premium przez CDP (port 9333): `layout`, `setLayout`,
+Zmierzone przez CDP na zalogowanym koncie TradingView: `layout`, `setLayout`,
 `chartsCount`, `activeChartIndex`, `setActiveChart` po stronie API strony,
 plus `paneWidgets` dla paneli wewnątrz jednego wykresu (cena, wskaźniki).
 

@@ -196,7 +196,7 @@ def test_wywolania_sa_szeregowane(monkeypatch):
 # ── wyjątki i wielkość odpowiedzi ───────────────────────────────────────
 def test_nieoczekiwany_wyjatek_bez_sladu_stosu_i_sciezek(monkeypatch):
     def pada(n, a):
-        raise RuntimeError("/home/user/.ssh/id_rsa nie istnieje")
+        raise RuntimeError("/SCIEZKA/DO/klucz nie istnieje")
 
     monkeypatch.setattr(serwer, "_obsluz", pada)
     w = _wywolaj("vgm_rynki", {})
