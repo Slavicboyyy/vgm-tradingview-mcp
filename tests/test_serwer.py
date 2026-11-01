@@ -123,29 +123,74 @@ def test_zawieszone_narzedzie_konczy_sie_limitem_czasu(monkeypatch):
 
 
 def test_wywolania_sa_szeregowane(monkeypatch):
-    """Wykres i limity zapytań nie są bezpieczne wątkowo — dwa wywołania nie nakładają się."""
-    import threading
-    import time as t
+    """Wykres i limity zapytań nie są bezpieczne wątkowo — dwa wywołania nie nakładają się.
 
-    aktywne, maks = [0], [0]
-    blokada = threading.Lock()
+    Bez time.sleep (conftest i tak go wyłącza, więc stara wersja nigdy nie
+    nakładała wywołań): pierwsze wywołanie trzyma obsługę, dopóki drugie nie
+    dotrze albo do zamka, albo — gdy zamka nie ma — do samej obsługi.
+    Dopiero wtedy pierwsze jest zwalniane. Wszystkie oczekiwania mają limit,
+    żeby błąd kończył test, a nie zawieszał go.
+    """
+    import threading
+
+    pierwszy_w_srodku = threading.Event()
+    drugi_dotarl = threading.Event()
+    zwolnij = threading.Event()
+    licznik = threading.Lock()
+    aktywne, maks, wejscia = [0], [0], [0]
+
+    class ZamekSledzacy:
+        """Prawdziwy zamek, który zgłasza, że drugie wywołanie próbuje wejść."""
+
+        def __init__(self):
+            self._zamek = threading.Lock()
+            self._prob = 0
+
+        def __enter__(self):
+            with licznik:
+                self._prob += 1
+                if self._prob == 2:
+                    drugi_dotarl.set()
+            self._zamek.acquire()
+            return self
+
+        def __exit__(self, *a):
+            self._zamek.release()
+            return False
 
     def obsluga(n, a):
-        with blokada:
+        with licznik:
             aktywne[0] += 1
+            wejscia[0] += 1
             maks[0] = max(maks[0], aktywne[0])
-        t.sleep(0.05)
-        with blokada:
+            ktory = wejscia[0]
+        if ktory == 1:
+            pierwszy_w_srodku.set()
+        else:
+            drugi_dotarl.set()
+        zwolnij.wait(5)
+        with licznik:
             aktywne[0] -= 1
         return "{}"
 
+    monkeypatch.setattr(serwer, "_ZAMEK", ZamekSledzacy())
     monkeypatch.setattr(serwer, "_obsluz", obsluga)
 
-    async def dwa():
-        await asyncio.gather(serwer.wywolaj("vgm_rynki", {}), serwer.wywolaj("vgm_rynki", {}))
+    async def scenariusz():
+        pierwsze = asyncio.create_task(serwer.wywolaj("vgm_rynki", {}))
+        assert await asyncio.to_thread(pierwszy_w_srodku.wait, 5), "pierwsze nie weszło"
+        drugie = asyncio.create_task(serwer.wywolaj("vgm_rynki", {}))
+        assert await asyncio.to_thread(drugi_dotarl.wait, 5), "drugie nie dotarło"
+        zwolnij.set()
+        return await asyncio.gather(pierwsze, drugie)
 
-    asyncio.run(dwa())
-    assert maks[0] == 1
+    try:
+        wyniki = asyncio.run(scenariusz())
+    finally:
+        zwolnij.set()
+    assert [json.loads(w[0].text) for w in wyniki] == [{}, {}]
+    assert wejscia[0] == 2
+    assert maks[0] == 1, "dwa wywołania były jednocześnie w obsłudze narzędzia"
 
 
 # ── wyjątki i wielkość odpowiedzi ───────────────────────────────────────
