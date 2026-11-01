@@ -3,11 +3,18 @@
 Moduły z `src/` importują się po nazwie (`import dane`), więc dodajemy `src/`
 do ścieżki. Pakiet `mcp` jest podmieniany prostym atrapą, żeby testy nie zależały
 od zainstalowanej wersji (dekoratory serwera zmieniają się między wydaniami)
-ani od niczego, co otwiera połączenie.
+ani od niczego, co otwiera połączenie. Zgodność z prawdziwym `mcp` sprawdza
+osobno tests/test_prawdziwe_mcp.py (w podprocesie, bez tej atrapy).
+
+Każde wyjście poza proces (HTTP, CDP) jest podmieniane w samym teście.
+Tu tylko zabezpieczenie: gdyby któraś poprawka przestała walidować wejście
+i kod sięgnął po sieć, test ma się wywrócić, a nie połączyć.
 """
 from __future__ import annotations
 
+import socket
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -66,6 +73,22 @@ def bez_czekania(monkeypatch):
 
     monkeypatch.setattr(dane, "_odczekaj", lambda: None)
     monkeypatch.setattr(dane.time, "sleep", lambda s: None)
+
+
+@pytest.fixture(autouse=True)
+def bez_sieci(monkeypatch):
+    """Żadnych gniazd: ani połączeń wprost, ani przez biblioteki."""
+    def zabronione(*a, **k):
+        raise AssertionError("test próbował otworzyć połączenie sieciowe")
+
+    monkeypatch.setattr(socket, "create_connection", zabronione)
+    monkeypatch.setattr(socket.socket, "connect", zabronione)
+
+
+@pytest.fixture(autouse=True)
+def bez_pauz(monkeypatch):
+    """Odstępy między zapytaniami i ponowienia nie mają spowalniać testów."""
+    monkeypatch.setattr(time, "sleep", lambda s: None)
 
 
 @pytest.fixture(autouse=True)

@@ -388,7 +388,8 @@ Przy poprawnym kodzie: `{"poprawny": true, "bledy": []}` (`podglad` jest tylko p
 `ostrzezenia` tylko gdy kompilator je zgłosił). Pusty kod daje błąd z `blad`.
 
 #### `vgm_pine_sprawdz_plik`
-To samo, ale kod czytany z pliku. Parametry: `sciezka` (wym.).
+To samo, ale kod czytany z pliku `.pine`/`.txt` z katalogu `VGM_KATALOG_PINE`
+(domyślnie katalog roboczy). Parametry: `sciezka` (wym.).
 
 ```json
 {"sciezka": "/SCIEZKA/DO/skrypt.pine"}
@@ -851,10 +852,10 @@ przez `vgm_pine_sprawdz`. Parametry: `kod` (wym.), `nazwa` (wym.).
 ```
 
 #### `vgm_usun_pine`
-Usuwa zapisany skrypt. **Nieodwracalne.** Parametry: `id` (wym.).
+Usuwa zapisany skrypt. **Nieodwracalne.** Parametry: `id` (wym.), `potwierdz` (wym., musi być `true`).
 
 ```json
-{"id": "<id z vgm_skrypty_pine>"}
+{"id": "<id z vgm_skrypty_pine>", "potwierdz": true}
 ```
 ```
 { "usuniety": <bool>, "zapisanych_teraz": <int> }
@@ -1005,6 +1006,20 @@ Parametry: `indeks` (wym.), `symbol` (wym.), `interwal` (pominięty = bez zmiany
 
 ---
 
+## Bezpieczeństwo wejścia
+
+Argumenty narzędzi sprawdza `src/walidacja.py` zanim trafią do adresu, ścieżki albo kodu JS.
+Zmienne środowiskowe:
+
+- `VGM_KATALOG_PINE` — skąd wolno czytać pliki dla `vgm_pine_sprawdz_plik` (domyślnie katalog roboczy),
+- `VGM_KATALOG_ZRZUTOW` — gdzie wolno zapisywać `vgm_wykres_zrzut` (domyślnie `<tmp>/vgm-mcp`), tylko `*.png`,
+- `VGM_CDP_PORT` — port przeglądarki, 1–65535.
+
+Zapytania HTTP idą tylko do hostów TradingView, bez przekierowań, z limitem rozmiaru odpowiedzi.
+Jedno wywołanie narzędzia ma twardy limit 240 s.
+
+---
+
 ## Testy
 
 Testy z katalogu `tests/` działają **bez sieci, bez przeglądarki i bez konta**:
@@ -1064,7 +1079,8 @@ python3 src/analiza.py   # krótki pokaz warstwy analizy
 - `vgm_lista_obserwowanych` czyta stronę, więc wymaga otwartego prawego panelu.
 - `vgm_tester_raport` czyta tylko strategię własną; wbudowanych strategii nie da się
   dodać na wykres przez `createStudy`. Wyniki testera są poglądowe.
-- `vgm_zapisz_pine` i `vgm_usun_pine` zmieniają konto; usunięcie jest nieodwracalne.
+- `vgm_zapisz_pine` i `vgm_usun_pine` zmieniają konto; usunięcie jest nieodwracalne
+  i wymaga `potwierdz=true`.
 
 **Pomiar sygnałów**
 - `vgm_zmierz_prog` i `vgm_porownaj_progi` mierzą wyłącznie RSI(14); pozostałe wskaźniki

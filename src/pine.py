@@ -16,6 +16,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import siec
+import walidacja as wal
+
 ADRES = "https://pine-facade.tradingview.com/pine-facade/translate_light/"
 
 # Zmierzone: nginx przed kompilatorem odrzuca zapytania bez Origin i Referer.
@@ -50,15 +53,19 @@ def sprawdz(kod: str) -> dict:
         {"poprawny": True, "bledy": []}
         {"poprawny": False, "bledy": [{linia, kolumna, komunikat}], "podglad": "..."}
     """
-    if not isinstance(kod, str) or not kod.strip():
-        raise BladPine("pusty kod")
+    try:
+        kod = wal.kod_pine(kod)
+    except wal.BladWejscia as e:
+        raise BladPine(str(e)) from e
 
     _odczekaj()
     dane = urllib.parse.urlencode({"source": kod}).encode()
     zad = urllib.request.Request(ADRES, data=dane, headers=NAGLOWKI)
 
     try:
-        o = json.loads(urllib.request.urlopen(zad, timeout=30).read())
+        o = json.loads(siec.pobierz(zad, timeout=30))
+    except siec.BladSieci as e:
+        raise BladPine(str(e)) from e
     except urllib.error.HTTPError as e:
         if e.code in (403, 429):
             raise BladPine(
@@ -69,7 +76,7 @@ def sprawdz(kod: str) -> dict:
     except Exception as e:
         raise BladPine(f"{type(e).__name__}: {e}") from e
 
-    if not o.get("success"):
+    if not isinstance(o, dict) or not o.get("success"):
         raise BladPine(f"kompilator odrzucił zapytanie: {str(o)[:150]}")
 
     wynik = o.get("result", {}) or {}
@@ -108,12 +115,12 @@ def _podglad(kod: str, bledy: list) -> str:
 
 def sprawdz_plik(sciezka: str) -> dict:
     """To samo, ale czyta kod z pliku."""
-    import pathlib
-
-    p = pathlib.Path(sciezka)
-    if not p.exists():
-        raise BladPine(f"nie ma takiego pliku: {sciezka}")
-    w = sprawdz(p.read_text(encoding="utf-8"))
+    try:
+        p = wal.sciezka_do_odczytu(sciezka)
+        kod = p.read_text(encoding="utf-8")
+    except (wal.BladWejscia, UnicodeDecodeError, OSError) as e:
+        raise BladPine(str(e)) from e
+    w = sprawdz(kod)
     w["plik"] = str(p)
     return w
 
@@ -134,6 +141,10 @@ plot(wartosc, "Średnia", color=color.blue)
 
 def szkielet(nazwa: str = "Nowy wskaźnik", na_wykresie: bool = True) -> str:
     """Zwraca poprawny szkielet skryptu — sprawdzony w kompilatorze."""
+    try:
+        nazwa = wal.nazwa_skryptu(nazwa, max_dl=80)
+    except wal.BladWejscia as e:
+        raise BladPine(str(e)) from e
     return SZKIELET.format(nazwa=nazwa,
                            na_wykresie="true" if na_wykresie else "false")
 
