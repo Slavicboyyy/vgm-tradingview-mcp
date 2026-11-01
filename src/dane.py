@@ -181,14 +181,16 @@ def zgodnosc(symbol: str, interwaly: list[str] | None = None,
     Nie podejmuje decyzji, tylko liczy. Próg i sposób łączenia należą do silnika,
     bo to one wymagają pomiaru, a nie ten odczyt.
     """
-    interwaly = wal.lista(interwaly, "interwaly", wal.interwal) if interwaly else ["5", "15", "60", "240"]
+    interwaly = (wal.lista(interwaly, "interwaly", _interwal_lub_biezacy)
+                 if interwaly else ["5", "15", "60", "240"])
     prog_kupno = wal.liczba(prog_kupno, "prog_kupno", 0, 100)
     prog_sprzedaz = wal.liczba(prog_sprzedaz, "prog_sprzedaz", 0, 100)
     dane = mtf(symbol, ["RSI"], interwaly)["RSI"]
 
     kupno = [i for i, v in dane.items() if v is not None and v >= prog_kupno]
     sprzedaz = [i for i, v in dane.items() if v is not None and v <= prog_sprzedaz]
-    brak = [i for i in interwaly if dane.get(i) is None]
+    # pusty interwał to bieżący: mtf zwraca go pod kluczem "biezacy", nie ""
+    brak = [i or "biezacy" for i in interwaly if dane.get(i or "biezacy") is None]
 
     return {
         "symbol": symbol,

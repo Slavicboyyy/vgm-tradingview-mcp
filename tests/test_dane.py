@@ -213,3 +213,23 @@ def test_zgodnosc_brak_interwalu_w_odpowiedzi_nie_daje_zgodnosci(atrapa_tv, monk
     z = dane.zgodnosc("X", ["5", "15"])
     assert z["wszystkie_zgodne"] is False
     assert z["bez_danych"] == ["15"]
+
+
+def test_zgodnosc_pusty_interwal_to_biezacy_a_nie_brak(atrapa_tv):
+    # interwaly=[""] to bieżący przedział; wartość wraca pod kluczem "biezacy",
+    # więc nie wolno jej zgłosić jako brakującej
+    a = atrapa_tv({"RSI": 60.0})
+    z = dane.zgodnosc("FX:EURUSD", [""])
+    assert a.wywolania[0][1] == ["RSI"]
+    assert z["rsi"] == {"biezacy": 60.0}
+    assert z["bez_danych"] == []
+    assert z["za_kupnem"] == ["biezacy"]
+    assert z["wszystkie_zgodne"] is True
+
+
+def test_zgodnosc_pusty_interwal_bez_wartosci_to_brak_biezacego(atrapa_tv):
+    atrapa_tv({"RSI": None, "RSI|60": 70.0})
+    z = dane.zgodnosc("FX:EURUSD", ["", "60"])
+    assert z["bez_danych"] == ["biezacy"]
+    assert z["za_kupnem"] == ["60"]
+    assert z["wszystkie_zgodne"] is False
