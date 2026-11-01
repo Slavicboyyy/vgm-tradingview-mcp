@@ -23,8 +23,10 @@ class BladSieci(Exception):
 
 
 class _BezPrzekierowan(urllib.request.HTTPRedirectHandler):
+    """Obsługa przekierowań, która każde przekierowanie zamienia w HTTPError."""
     def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str,
                          headers: Any, newurl: str) -> urllib.request.Request | None:
+        """Zamiast przekierować, rzuca HTTPError z adresem docelowym."""
         raise urllib.error.HTTPError(req.full_url, code,
                                      f"przekierowanie do {newurl[:80]} zablokowane",
                                      headers, fp)
@@ -34,6 +36,7 @@ _OPENER = urllib.request.build_opener(_BezPrzekierowan)
 
 
 def sprawdz_adres(url: str) -> str:
+    """Przepuszcza tylko HTTPS do hostów z HOSTY, bez danych logowania w adresie."""
     u = urllib.parse.urlsplit(url)
     if u.scheme != "https" or u.hostname not in HOSTY or u.username or u.password:
         raise BladSieci(f"adres niedozwolony: {u.scheme}://{u.hostname}")

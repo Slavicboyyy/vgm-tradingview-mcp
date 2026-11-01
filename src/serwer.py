@@ -42,6 +42,7 @@ L: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 
 def _n(nazwa: str, opis: str, wlasciwosci: dict[str, Any] | None = None,
        wymagane: list[str] | None = None) -> Tool:
+    """Opis narzędzia warstwy danych z dopisanym zastrzeżeniem UWAGA."""
     return Tool(
         name=nazwa,
         description=opis + " " + UWAGA,
@@ -55,6 +56,10 @@ def _n(nazwa: str, opis: str, wlasciwosci: dict[str, Any] | None = None,
 
 @serwer.list_tools()
 async def lista_narzedzi() -> list[Tool]:
+    """Wszystkie narzędzia serwera z opisami i schematami wejścia (MCP list_tools).
+
+    Każde narzędzie z tej listy ma sekcję w docs/NARZEDZIA.md — pilnuje tego
+    tests/test_dokumentacja.py."""
     sym = {"symbol": dict(S, description="Nazwa z giełdą: FX:EURUSD, NASDAQ:NVDA, COINBASE:BTCUSD")}
     interw = {"interwal": dict(S, description="1, 5, 15, 60, 240, 1W. Pominięty = bieżący")}
     rynek = {"rynek": dict(S, description="forex, crypto, coin, america, poland, germany, uk, japan, futures, cfd", default="forex")}
@@ -544,12 +549,14 @@ async def lista_narzedzi() -> list[Tool]:
 
 
 def _bool(x: object) -> bool:
+    """Przepuszcza tylko prawdziwy bool; inaczej BladWejscia."""
     if not isinstance(x, bool):
         raise wal.BladWejscia("oczekiwano true/false")
     return x
 
 
 def _jeden_z(*dozwolone: str) -> Callable[[object], str]:
+    """Walidator przepuszczający tylko jedną z podanych wartości tekstowych."""
     def f(x: object) -> str:
         if not isinstance(x, str) or x not in dozwolone:
             raise wal.BladWejscia(f"dozwolone: {', '.join(dozwolone)}")
@@ -558,10 +565,12 @@ def _jeden_z(*dozwolone: str) -> Callable[[object], str]:
 
 
 def _LICZBA(x: object) -> float:
+    """Skończona liczba z przedziału ±1e9 (progi wskaźników)."""
     return wal.liczba(x, "liczba", -1e9, 1e9)
 
 
 def _LISTA_POL(x: object) -> list[str]:
+    """Lista nazw pól TradingView, każda sprawdzona przez wal.pole."""
     return wal.lista(x, "pola", wal.pole)
 
 # Walidatory argumentów wspólne dla wszystkich narzędzi. Klucz spoza tabeli
@@ -655,6 +664,7 @@ async def wywolaj(nazwa: str, a: dict[str, Any]) -> list[TextContent]:
 
 
 def _usun_pine(a: dict[str, Any]) -> Any:
+    """Usuwa skrypt Pine tylko przy jawnym potwierdz=true."""
     # nieodwracalne — model nie może tego zrobić jednym, domyślnym wywołaniem
     if a.get("potwierdz") is not True:
         raise wal.BladWejscia("usunięcie jest nieodwracalne — dodaj potwierdz=true")
@@ -868,6 +878,7 @@ def _obsluz(nazwa: str, a: dict[str, Any]) -> str:
 
 
 async def main() -> None:
+    """Uruchamia serwer MCP na stdin/stdout."""
     async with stdio_server() as (we, wy):
         await serwer.run(we, wy, serwer.create_initialization_options())
 

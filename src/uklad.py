@@ -52,6 +52,7 @@ var wv=function(x){ try{ return (x&&typeof x.value==='function')?x.value():x; }c
 
 
 def _u(kod: str, czekaj: float = 30) -> Any:
+    """Kod układu na stronie; wynik z `blad` rzuca BladUkladu."""
     return wykres.uruchom(_PROLOG, kod, czekaj, BladUkladu)
 
 

@@ -70,6 +70,7 @@ def _to_tradingview(url: str) -> bool:
 
 
 def _karta() -> Json:
+    """Pierwsza karta przeglądarki z TradingView po HTTPS; inaczej BladWykresu."""
     if websocket is None:
         raise BladWykresu(
             "brakuje pakietu websocket-client — zainstaluj: pip install websocket-client")
@@ -143,6 +144,7 @@ def _cdp(metoda: str, parametry: Json, polaczenie_s: float,
 
 
 def _wykonaj_raz(kod: str, czekaj: float = 25) -> Any:
+    """Jedno Runtime.evaluate na karcie; wyjątek ze strony staje się BladWykresu."""
     o, _ = _cdp("Runtime.evaluate",
              {"expression": kod, "returnByValue": True, "awaitPromise": True},
              czekaj, czekaj)
@@ -175,6 +177,7 @@ def _na_wykresie(cialo: str) -> str:
 
 
 def _sprawdz(w: Any, wyjatek: type[Exception] = BladWykresu) -> Any:
+    """Wynik z kluczem `blad` zamienia w wyjątek podanego typu."""
     if isinstance(w, dict) and "blad" in w:
         raise wyjatek(w["blad"])
     return w
@@ -197,11 +200,13 @@ def _na(cialo: str, czekaj: float = 25) -> Any:
 
 
 def _na_slownik(cialo: str, czekaj: float = 25) -> Json:
+    """Jak `_na`, z wynikiem otypowanym jako słownik."""
     w: Json = _na(cialo, czekaj)
     return w
 
 
 def _na_liste(cialo: str, czekaj: float = 25) -> list[Json]:
+    """Jak `_na`, z wynikiem otypowanym jako lista słowników."""
     w: list[Json] = _na(cialo, czekaj)
     return w
 
@@ -696,6 +701,7 @@ def przelacz(symbol: str, interwal: str | None = None, sekund: float = 30) -> Js
 
 
 def _demo() -> int:
+    """Sprawdzenie na żywej przeglądarce — uruchom ten plik wprost."""
     print("1. zdrowie")
     z = zdrowie()
     for k, v in z.items():

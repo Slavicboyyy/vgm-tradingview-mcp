@@ -147,6 +147,7 @@ def _placebo_dla(swiece: list[Swieca], wejscia: list[int], od: int, do: int,
 
 
 def _sprawdz_kierunek(kierunek: str) -> None:
+    """Rzuca BladPomiaru, gdy kierunek nie jest `ponizej` ani `powyzej`."""
     if kierunek not in ("ponizej", "powyzej"):
         raise BladPomiaru(f"nieznany kierunek: {kierunek} — dostępne: ponizej, powyzej")
 
@@ -379,6 +380,7 @@ def porownaj_progi(progi: list[float] | None = None, kierunek: str = "ponizej",
 
 # ── wskaźniki liczone u nas, żeby dało się je policzyć dla każdej świecy ──
 def _sma(ceny: list[float], okres: int) -> list[float | None]:
+    """Średnia prosta z `okres` zamknięć; None, dopóki nie ma pełnego okna."""
     w: list[float | None] = [None] * len(ceny)
     for i in range(okres - 1, len(ceny)):
         w[i] = sum(ceny[i - okres + 1:i + 1]) / okres
@@ -484,6 +486,7 @@ WSKAZNIKI = {
 
 
 def _policz(nazwa: str, swiece: list[Swieca]) -> list[float | None]:
+    """Wartości wskaźnika z WSKAZNIKI dla każdej świecy (None w rozbiegu)."""
     zamkniecia = [s["zamkniecie"] for s in swiece]
     if nazwa == "RSI":
         return _rsi(zamkniecia, 14)
@@ -878,6 +881,7 @@ def koszt_a_przewaga(wskaznik: str = "Bollinger", prog: float = 90,
 
 
 def _demo() -> None:
+    """Pomiar RSI<30 na aktywnym wykresie — uruchom ten plik wprost."""
     print("Pomiar: czy RSI poniżej 30 cokolwiek zapowiada\n")
     w = zmierz_prog("RSI", 30, "ponizej", po_ilu=10)
     for k, v in w.items():
