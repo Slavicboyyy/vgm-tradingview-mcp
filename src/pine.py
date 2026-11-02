@@ -99,9 +99,13 @@ def _podglad(kod: str, bledy: list) -> str:
     kawalki = []
     for b in bledy[:10]:
         nr = b.get("linia")
-        tresc = linie[nr - 1] if isinstance(nr, int) and 1 <= nr <= len(linie) else "?"
-        wciecie = " " * max(0, (b.get("kolumna") or 1) - 1)
-        kawalki.append(f"{nr:>4} | {tresc}\n     | {wciecie}^-- {b['komunikat']}")
+        if not (isinstance(nr, int) and 1 <= nr <= len(linie)):
+            # kompilator potrafi zgłosić błąd całego skryptu, bez linii i kolumny
+            kawalki.append(f"   ? | {b['komunikat']}")
+            continue
+        kol = b.get("kolumna")
+        wciecie = " " * max(0, (kol if isinstance(kol, int) else 1) - 1)
+        kawalki.append(f"{nr:>4} | {linie[nr - 1]}\n     | {wciecie}^-- {b['komunikat']}")
     return "\n".join(kawalki)
 
 
@@ -112,7 +116,15 @@ def sprawdz_plik(sciezka: str) -> dict:
     p = pathlib.Path(sciezka)
     if not p.exists():
         raise BladPine(f"nie ma takiego pliku: {sciezka}")
-    w = sprawdz(p.read_text(encoding="utf-8"))
+    if not p.is_file():
+        raise BladPine(f"to nie jest plik: {sciezka}")
+    try:
+        kod = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise BladPine(f"plik nie jest tekstem w UTF-8: {sciezka}") from e
+    except OSError as e:
+        raise BladPine(f"nie da się odczytać pliku: {type(e).__name__}: {e}") from e
+    w = sprawdz(kod)
     w["plik"] = str(p)
     return w
 

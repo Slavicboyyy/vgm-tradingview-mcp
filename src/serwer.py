@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -22,11 +23,10 @@ import analiza  # noqa: E402
 import dane  # noqa: E402
 import pola  # noqa: E402
 
+import anyio  # noqa: E402
 from mcp.server import Server  # noqa: E402
 from mcp.server.stdio import stdio_server  # noqa: E402
-from mcp.types import TextContent, Tool  # noqa: E402
-
-serwer = Server("vgm-mcp")
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool  # noqa: E402
 
 UWAGA = ("Dane z publicznego punktu TradingView, liczone po ich stronie. "
          "To nie są kwotowania brokera — do handlu użyj ceny od swojego brokera.")
@@ -47,7 +47,6 @@ def _n(nazwa, opis, wlasciwosci=None, wymagane=None):
     )
 
 
-@serwer.list_tools()
 async def lista_narzedzi() -> list[Tool]:
     sym = {"symbol": dict(S, description="Nazwa z giełdą: FX:EURUSD, NASDAQ:NVDA, COINBASE:BTCUSD")}
     interw = {"interwal": dict(S, description="1, 5, 15, 60, 240, 1W. Pominięty = bieżący")}
@@ -533,216 +532,292 @@ async def lista_narzedzi() -> list[Tool]:
     ]
 
 
-@serwer.call_tool()
-async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
-    def ok(x):
-        return [TextContent(type="text", text=json.dumps(x, ensure_ascii=False, indent=1))]
+# Jedno narzędzie naraz: wszystkie sterują tą samą kartą przeglądarki i dzielą
+# ograniczniki tempa zapytań do TradingView. Kolejne wywołania czekają w kolejce.
+_jedno_naraz = threading.Lock()
 
+
+async def wywolaj(nazwa: str, a: dict | None) -> list[TextContent]:
+    """Wywołanie narzędzia. Zawsze zwraca JSON; błąd ma klucz `blad`.
+
+    Narzędzia są synchroniczne i potrafią czekać na przeglądarkę kilkadziesiąt
+    sekund (przełączenie z weryfikacją, odtwarzanie, przegląd instrumentów).
+    Liczone w pętli zdarzeń blokowały cały serwer: klient nie dostawał
+    odpowiedzi nawet na ping ani anulowanie. Dlatego idą do osobnego wątku.
+    """
+    def praca():
+        with _jedno_naraz:
+            return _obsluz(nazwa, dict(a or {}))
+
+    wynik = await anyio.to_thread.run_sync(praca)
+    return [TextContent(type="text", text=json.dumps(wynik, ensure_ascii=False, indent=1))]
+
+
+def _czy_blad(tresc: list[TextContent]) -> bool:
     try:
-        if nazwa == "vgm_odczyt":
-            return ok(dane.odczyt(a["symbol"], a.get("pola")))
-        if nazwa == "vgm_obraz":
-            return ok(analiza.obraz(a["symbol"], a.get("interwal")))
-        if nazwa == "vgm_rynki":
-            return ok(pola.RYNKI)
-        if nazwa == "vgm_obraz_pelny":
-            return ok(analiza.obraz_pelny(a["symbol"]))
-        if nazwa == "vgm_pola":
-            return ok({g: lista for g, lista in pola.GRUPY.items()}
-                      | {"interwaly_zmierzone": pola.INTERWALY_PEWNE})
-        if nazwa == "vgm_polozenie":
-            return ok(analiza.polozenie(a["symbol"], a.get("interwal")))
-        if nazwa == "vgm_srednie":
-            return ok(analiza.uklad_srednich(a["symbol"], a.get("interwal")))
-        if nazwa == "vgm_mtf":
-            return ok(dane.mtf(a["symbol"], a.get("wskazniki"), a.get("interwaly")))
-        if nazwa == "vgm_zgodnosc":
-            return ok(dane.zgodnosc(a["symbol"], a.get("interwaly"),
-                                    a.get("prog_kupno", 55), a.get("prog_sprzedaz", 45)))
-        if nazwa == "vgm_zgodnosc_pelna":
-            return ok(analiza.zgodnosc_pelna(a["symbol"], a.get("wskazniki"),
-                                             a.get("interwaly")))
-        if nazwa == "vgm_wiele":
-            return ok(dane.wiele(a["symbole"], a.get("pola")))
-        if nazwa == "vgm_porownaj":
-            return ok(analiza.porownaj(a["symbole"], a.get("pola")))
-        if nazwa == "vgm_skan_wyprzedane":
-            return ok(analiza.skan_wyprzedane(a.get("rynek", "forex"),
-                                              a.get("prog", 30), a.get("ile", 20)))
-        if nazwa == "vgm_skan_wykupione":
-            return ok(analiza.skan_wykupione(a.get("rynek", "forex"),
-                                             a.get("prog", 70), a.get("ile", 20)))
-        if nazwa == "vgm_skan_trend":
-            return ok(analiza.skan_silny_trend(a.get("rynek", "forex"),
-                                               a.get("prog_adx", 30), a.get("ile", 20)))
-        if nazwa == "vgm_skan_wolumen":
-            return ok(analiza.skan_wolumen(a.get("rynek", "forex"),
-                                           a.get("krotnosc", 2.0), a.get("ile", 20)))
-        if nazwa == "vgm_skan":
-            return ok(analiza.skan_wlasny(a["rynek"], a["warunki"],
-                                          a.get("pola"), a.get("ile", 30)))
-        # ── sesja ───────────────────────────────────────────────────────
-        SESJA = {"vgm_sesja": lambda a: sesja.czy_zalogowany(),
-                 "vgm_alerty": lambda a: sesja.alerty(),
-                 "vgm_lista_obserwowanych": lambda a: sesja.lista_obserwowanych(),
-                 "vgm_skrypty_pine": lambda a: sesja.skrypty_pine(),
-                 "vgm_zrodlo_pine": lambda a: sesja.zrodlo_pine(a["id"]),
-                 "vgm_zapisz_pine": lambda a: sesja.zapisz_pine(a["kod"], a["nazwa"]),
-                 "vgm_usun_pine": lambda a: sesja.usun_pine(a["id"]),
-                 "vgm_strategie_wbudowane": lambda a: sesja.strategie_wbudowane(),
-                 "vgm_tester_raport": lambda a: sesja.tester_raport()}
-        if nazwa in SESJA:
-            import sesja
-            try:
-                return ok(SESJA[nazwa](a))
-            except sesja.BladSesji as e:
-                return ok({"blad": str(e), "narzedzie": nazwa,
-                           "podpowiedz": "zaloguj się na TradingView w przeglądarce z CDP"})
+        x = json.loads(tresc[0].text)
+    except (ValueError, IndexError, AttributeError):
+        return False
+    return isinstance(x, dict) and "blad" in x
 
-        # ── Pine ────────────────────────────────────────────────────────
-        if nazwa.startswith("vgm_pine"):
-            import pine
 
-            try:
-                if nazwa == "vgm_pine_sprawdz":
-                    return ok(pine.sprawdz(a["kod"]))
-                if nazwa == "vgm_pine_sprawdz_plik":
-                    return ok(pine.sprawdz_plik(a["sciezka"]))
-                if nazwa == "vgm_pine_szkielet":
-                    return ok({"kod": pine.szkielet(a.get("nazwa", "Nowy wskaźnik"),
-                                                    a.get("na_wykresie", True))})
-            except pine.BladPine as e:
-                return ok({"blad": str(e), "narzedzie": nazwa})
-
-        # ── wykres ──────────────────────────────────────────────────────
-        # Lista musi obejmować KAŻDE narzędzie tej grupy — narzędzie spoza niej
-        # jest zadeklarowane, ale nieobsługiwane, i zwraca "nieznane narzędzie".
-        # Pilnuje tego .narzedzia/sprawdz_wszystkie.py, który woła wszystkie po kolei.
-        if nazwa.startswith(("vgm_wykres", "vgm_wskaznik", "vgm_swiece",
-                             "vgm_zmierz", "vgm_porownaj_progi",
-                             "vgm_przeglad_",          # wskaznikow ORAZ instrumentow
-                             "vgm_sygnal_czy_trend",
-                             "vgm_odniesienie_trzymanie", "vgm_jak_dlugo_trzymac",
-                             "vgm_koszt_a_przewaga", "vgm_walk_forward",
-                             "vgm_replay_", "vgm_uklad_")):
-            import wykres  # dopiero tutaj — reszta działa bez websocket-client
-
-            try:
-                if nazwa == "vgm_wykres_karta":
-                    return ok(wykres.zapewnij_karte(a.get("symbol", "FX:EURUSD")))
-                if nazwa == "vgm_wykres_zdrowie":
-                    return ok(wykres.zdrowie())
-                if nazwa == "vgm_wykres_stan":
-                    return ok(wykres.stan())
-                if nazwa == "vgm_wykres_wartosci":
-                    return ok(wykres.wartosci())
-                if nazwa == "vgm_wykres_przelacz":
-                    return ok(wykres.przelacz(a["symbol"], a.get("interwal")))
-                if nazwa == "vgm_przeglad_instrumentow":
-                    import pomiar
-                    inst = a.get("instrumenty")
-                    if inst:
-                        inst = [tuple(x) for x in inst]
-                    return ok(pomiar.przeglad_instrumentow(inst, a.get("po_ilu", 10)))
-                if nazwa == "vgm_wykres_symbol":
-                    return ok(wykres.ustaw_symbol(a["symbol"]))
-                if nazwa == "vgm_wykres_interwal":
-                    return ok(wykres.ustaw_interwal(a["interwal"]))
-                if nazwa == "vgm_wykres_typ":
-                    return ok(wykres.ustaw_typ(a["typ"]))
-                if nazwa == "vgm_wskaznik_dodaj":
-                    return ok(wykres.dodaj_wskaznik(a["nazwa"]))
-                if nazwa == "vgm_wskaznik_usun":
-                    return ok(wykres.usun_wskaznik(a["id"]))
-                if nazwa == "vgm_wykres_swiece":
-                    return ok(wykres.swiece(a.get("ile", 100)))
-                if nazwa == "vgm_swiece_statystyka":
-                    return ok(analiza.statystyka_swiec(a.get("ile", 200)))
-                if nazwa == "vgm_zmierz_prog":
-                    import pomiar
-                    return ok(pomiar.zmierz_prog(
-                        "RSI", a.get("prog", 30), a.get("kierunek", "ponizej"),
-                        a.get("po_ilu", 10), a.get("ile_swiec", 0),
-                        a.get("spread_proc", 0.02)))
-                if nazwa.startswith("vgm_uklad_"):
-                    import uklad
-                    UKLAD = {"vgm_uklad_stan": lambda a: uklad.stan(),
-                             "vgm_uklad_ustaw": lambda a: uklad.ustaw(a.get("kod", "s")),
-                             "vgm_uklad_wybierz": lambda a: uklad.wybierz(a.get("indeks", 0)),
-                             "vgm_uklad_symbol": lambda a: uklad.symbol_w_wykresie(
-                                 a["indeks"], a["symbol"], a.get("interwal"))}
-                    try:
-                        return ok(UKLAD[nazwa](a))
-                    except uklad.BladUkladu as e:
-                        return ok({"blad": str(e), "narzedzie": nazwa})
-                if nazwa.startswith("vgm_replay_"):
-                    import replay
-                    REPLAY = {"vgm_replay_stan": lambda a: replay.stan(),
-                              "vgm_replay_start": lambda a: replay.start(a.get("data")),
-                              "vgm_replay_krok": lambda a: replay.krok(a.get("ile", 1)),
-                              "vgm_replay_autoplay": lambda a: replay.autoplay(
-                                  a.get("wlacz", True), a.get("opoznienie_ms")),
-                              "vgm_replay_stop": lambda a: replay.stop()}
-                    try:
-                        return ok(REPLAY[nazwa](a))
-                    except replay.BladReplay as e:
-                        return ok({"blad": str(e), "narzedzie": nazwa})
-                if nazwa == "vgm_walk_forward":
-                    import pomiar
-                    return ok(pomiar.walk_forward(
-                        a.get("wskaznik", "RSI"), a.get("kierunek", "ponizej"), a.get("progi"),
-                        a.get("po_ilu", 10), a.get("ile_swiec", 0), a.get("czesc_ucz", 0.7),
-                        a.get("spread_proc", 0.0)))
-                if nazwa == "vgm_zmierz":
-                    import pomiar
-                    return ok(pomiar.zmierz(
-                        a.get("wskaznik", "RSI"), a.get("prog", 30),
-                        a.get("kierunek", "ponizej"), a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
-                if nazwa == "vgm_sygnal_czy_trend":
-                    import pomiar
-                    return ok(pomiar.czy_sygnal_czy_trend(
-                        a.get("wskaznik", "Bollinger"), a.get("prog", 90),
-                        a.get("kierunek", "powyzej"), a.get("po_ilu", 10)))
-                if nazwa == "vgm_koszt_a_przewaga":
-                    import pomiar
-                    return ok(pomiar.koszt_a_przewaga(
-                        a.get("wskaznik", "Bollinger"), a.get("prog", 90),
-                        a.get("kierunek", "powyzej"), a.get("po_ilu", 40),
-                        0, a.get("koszty")))
-                if nazwa == "vgm_jak_dlugo_trzymac":
-                    import pomiar
-                    return ok(pomiar.jak_dlugo_trzymac(
-                        a.get("wskaznik", "Bollinger"), a.get("prog", 90),
-                        a.get("kierunek", "powyzej"), a.get("dlugosci")))
-                if nazwa == "vgm_odniesienie_trzymanie":
-                    import pomiar
-                    return ok(pomiar.odniesienie_trzymanie(a.get("po_ilu", 10)))
-                if nazwa == "vgm_przeglad_wskaznikow":
-                    import pomiar
-                    return ok(pomiar.przeglad_wskaznikow(
-                        a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
-                if nazwa == "vgm_porownaj_progi":
-                    import pomiar
-                    return ok(pomiar.porownaj_progi(
-                        a.get("progi"), a.get("kierunek", "ponizej"),
-                        a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
-                if nazwa == "vgm_swiece_przedzialy":
-                    return ok(analiza.swiece_wiele_przedzialow(
-                        a.get("przedzialy"), a.get("ile", 100)))
-                if nazwa == "vgm_swiece_zmiennosc":
-                    return ok(analiza.zmiennosc_swiec(a.get("ile", 200), a.get("okno", 20)))
-                if nazwa == "vgm_wykres_zrzut":
-                    return ok(wykres.zrzut(a.get("sciezka"), a.get("zamknij_okna", True)))
-            except wykres.BladWykresu as e:
-                return ok({"blad": str(e), "narzedzie": nazwa,
-                           "podpowiedz": "sprawdź vgm_wykres_zdrowie"})
-
-        return ok({"blad": f"nieznane narzędzie: {nazwa}"})
-
+def _obsluz(nazwa: str, a: dict):
+    """Rozdział wywołań i zamiana każdego wyjątku na czytelny błąd."""
+    try:
+        return _rozdziel(nazwa, a)
     except dane.BladTV as e:
-        return ok({"blad": str(e), "narzedzie": nazwa})
+        return {"blad": str(e), "narzedzie": nazwa}
     except KeyError as e:
-        return ok({"blad": f"brakuje wymaganego pola: {e}", "narzedzie": nazwa})
+        return {"blad": f"brakuje wymaganego pola: {e}", "narzedzie": nazwa}
+    except Exception as e:  # noqa: BLE001 — model ma dostać powód, nie ślad stosu
+        wynik = {"blad": f"{type(e).__name__}: {str(e)[:200]}", "narzedzie": nazwa}
+        wykres = sys.modules.get("wykres")
+        if wykres is not None and isinstance(e, wykres.BladWykresu):
+            wynik["blad"] = str(e)
+            wynik["podpowiedz"] = "sprawdź vgm_wykres_zdrowie"
+        pomiar = sys.modules.get("pomiar")
+        if pomiar is not None and isinstance(e, pomiar.BladPomiaru):
+            wynik["blad"] = str(e)
+        return wynik
+
+
+def _rozdziel(nazwa: str, a: dict):
+    def ok(x):
+        return x
+
+    if nazwa == "vgm_odczyt":
+        return ok(dane.odczyt(a["symbol"], a.get("pola")))
+    if nazwa == "vgm_obraz":
+        return ok(analiza.obraz(a["symbol"], a.get("interwal")))
+    if nazwa == "vgm_rynki":
+        return ok(pola.RYNKI)
+    if nazwa == "vgm_obraz_pelny":
+        return ok(analiza.obraz_pelny(a["symbol"]))
+    if nazwa == "vgm_pola":
+        return ok({g: lista for g, lista in pola.GRUPY.items()}
+                  | {"interwaly_zmierzone": pola.INTERWALY_PEWNE})
+    if nazwa == "vgm_polozenie":
+        return ok(analiza.polozenie(a["symbol"], a.get("interwal")))
+    if nazwa == "vgm_srednie":
+        return ok(analiza.uklad_srednich(a["symbol"], a.get("interwal")))
+    if nazwa == "vgm_mtf":
+        return ok(dane.mtf(a["symbol"], a.get("wskazniki"), a.get("interwaly")))
+    if nazwa == "vgm_zgodnosc":
+        return ok(dane.zgodnosc(a["symbol"], a.get("interwaly"),
+                                a.get("prog_kupno", 55), a.get("prog_sprzedaz", 45)))
+    if nazwa == "vgm_zgodnosc_pelna":
+        return ok(analiza.zgodnosc_pelna(a["symbol"], a.get("wskazniki"),
+                                         a.get("interwaly")))
+    if nazwa == "vgm_wiele":
+        return ok(dane.wiele(a["symbole"], a.get("pola")))
+    if nazwa == "vgm_porownaj":
+        return ok(analiza.porownaj(a["symbole"], a.get("pola")))
+    if nazwa == "vgm_skan_wyprzedane":
+        return ok(analiza.skan_wyprzedane(a.get("rynek", "forex"),
+                                          a.get("prog", 30), a.get("ile", 20)))
+    if nazwa == "vgm_skan_wykupione":
+        return ok(analiza.skan_wykupione(a.get("rynek", "forex"),
+                                         a.get("prog", 70), a.get("ile", 20)))
+    if nazwa == "vgm_skan_trend":
+        return ok(analiza.skan_silny_trend(a.get("rynek", "forex"),
+                                           a.get("prog_adx", 30), a.get("ile", 20)))
+    if nazwa == "vgm_skan_wolumen":
+        return ok(analiza.skan_wolumen(a.get("rynek", "forex"),
+                                       a.get("krotnosc", 2.0), a.get("ile", 20)))
+    if nazwa == "vgm_skan":
+        return ok(analiza.skan_wlasny(a["rynek"], a["warunki"],
+                                      a.get("pola"), a.get("ile", 30)))
+    # ── sesja ───────────────────────────────────────────────────────
+    SESJA = {"vgm_sesja": lambda a: sesja.czy_zalogowany(),
+             "vgm_alerty": lambda a: sesja.alerty(),
+             "vgm_lista_obserwowanych": lambda a: sesja.lista_obserwowanych(),
+             "vgm_skrypty_pine": lambda a: sesja.skrypty_pine(),
+             "vgm_zrodlo_pine": lambda a: sesja.zrodlo_pine(a["id"]),
+             "vgm_zapisz_pine": lambda a: sesja.zapisz_pine(a["kod"], a["nazwa"]),
+             "vgm_usun_pine": lambda a: sesja.usun_pine(a["id"]),
+             "vgm_strategie_wbudowane": lambda a: sesja.strategie_wbudowane(),
+             "vgm_tester_raport": lambda a: sesja.tester_raport()}
+    if nazwa in SESJA:
+        import sesja
+        import wykres
+        try:
+            return ok(SESJA[nazwa](a))
+        except sesja.BladSesji as e:
+            return ok({"blad": str(e), "narzedzie": nazwa,
+                       "podpowiedz": "zaloguj się na TradingView w przeglądarce z CDP"})
+        except wykres.BladWykresu as e:
+            return ok({"blad": str(e), "narzedzie": nazwa,
+                       "podpowiedz": "sprawdź vgm_wykres_zdrowie"})
+
+    # ── Pine ────────────────────────────────────────────────────────
+    if nazwa.startswith("vgm_pine"):
+        import pine
+
+        try:
+            if nazwa == "vgm_pine_sprawdz":
+                return ok(pine.sprawdz(a["kod"]))
+            if nazwa == "vgm_pine_sprawdz_plik":
+                return ok(pine.sprawdz_plik(a["sciezka"]))
+            if nazwa == "vgm_pine_szkielet":
+                return ok({"kod": pine.szkielet(a.get("nazwa", "Nowy wskaźnik"),
+                                                a.get("na_wykresie", True))})
+        except pine.BladPine as e:
+            return ok({"blad": str(e), "narzedzie": nazwa})
+
+    # ── wykres ──────────────────────────────────────────────────────
+    # Lista musi obejmować KAŻDE narzędzie tej grupy — narzędzie spoza niej
+    # jest zadeklarowane, ale nieobsługiwane, i zwraca "nieznane narzędzie".
+    # Pilnuje tego tests/test_integracja_mcp.py, który woła wszystkie po kolei.
+    if nazwa.startswith(("vgm_wykres", "vgm_wskaznik", "vgm_swiece",
+                         "vgm_zmierz", "vgm_porownaj_progi",
+                         "vgm_przeglad_",          # wskaznikow ORAZ instrumentow
+                         "vgm_sygnal_czy_trend",
+                         "vgm_odniesienie_trzymanie", "vgm_jak_dlugo_trzymac",
+                         "vgm_koszt_a_przewaga", "vgm_walk_forward",
+                         "vgm_replay_", "vgm_uklad_")):
+        import wykres  # dopiero tutaj — reszta działa bez websocket-client
+
+        try:
+            if nazwa == "vgm_wykres_karta":
+                return ok(wykres.zapewnij_karte(a.get("symbol", "FX:EURUSD")))
+            if nazwa == "vgm_wykres_zdrowie":
+                return ok(wykres.zdrowie())
+            if nazwa == "vgm_wykres_stan":
+                return ok(wykres.stan())
+            if nazwa == "vgm_wykres_wartosci":
+                return ok(wykres.wartosci())
+            if nazwa == "vgm_wykres_przelacz":
+                return ok(wykres.przelacz(a["symbol"], a.get("interwal")))
+            if nazwa == "vgm_przeglad_instrumentow":
+                import pomiar
+                inst = a.get("instrumenty")
+                if inst:
+                    inst = [tuple(x) for x in inst]
+                return ok(pomiar.przeglad_instrumentow(inst, a.get("po_ilu", 10)))
+            if nazwa == "vgm_wykres_symbol":
+                return ok(wykres.ustaw_symbol(a["symbol"]))
+            if nazwa == "vgm_wykres_interwal":
+                return ok(wykres.ustaw_interwal(a["interwal"]))
+            if nazwa == "vgm_wykres_typ":
+                return ok(wykres.ustaw_typ(a["typ"]))
+            if nazwa == "vgm_wskaznik_dodaj":
+                return ok(wykres.dodaj_wskaznik(a["nazwa"]))
+            if nazwa == "vgm_wskaznik_usun":
+                return ok(wykres.usun_wskaznik(a["id"]))
+            if nazwa == "vgm_wykres_swiece":
+                return ok(wykres.swiece(a.get("ile", 100)))
+            if nazwa == "vgm_swiece_statystyka":
+                return ok(analiza.statystyka_swiec(a.get("ile", 200)))
+            if nazwa == "vgm_zmierz_prog":
+                import pomiar
+                return ok(pomiar.zmierz_prog(
+                    "RSI", a.get("prog", 30), a.get("kierunek", "ponizej"),
+                    a.get("po_ilu", 10), a.get("ile_swiec", 0),
+                    a.get("spread_proc", 0.02)))
+            if nazwa.startswith("vgm_uklad_"):
+                import uklad
+                UKLAD = {"vgm_uklad_stan": lambda a: uklad.stan(),
+                         "vgm_uklad_ustaw": lambda a: uklad.ustaw(a.get("kod", "s")),
+                         "vgm_uklad_wybierz": lambda a: uklad.wybierz(a.get("indeks", 0)),
+                         "vgm_uklad_symbol": lambda a: uklad.symbol_w_wykresie(
+                             a["indeks"], a["symbol"], a.get("interwal"))}
+                try:
+                    return ok(UKLAD[nazwa](a))
+                except uklad.BladUkladu as e:
+                    return ok({"blad": str(e), "narzedzie": nazwa})
+            if nazwa.startswith("vgm_replay_"):
+                import replay
+                REPLAY = {"vgm_replay_stan": lambda a: replay.stan(),
+                          "vgm_replay_start": lambda a: replay.start(a.get("data")),
+                          "vgm_replay_krok": lambda a: replay.krok(a.get("ile", 1)),
+                          "vgm_replay_autoplay": lambda a: replay.autoplay(
+                              a.get("wlacz", True), a.get("opoznienie_ms")),
+                          "vgm_replay_stop": lambda a: replay.stop()}
+                try:
+                    return ok(REPLAY[nazwa](a))
+                except replay.BladReplay as e:
+                    return ok({"blad": str(e), "narzedzie": nazwa})
+            if nazwa == "vgm_walk_forward":
+                import pomiar
+                return ok(pomiar.walk_forward(
+                    a.get("wskaznik", "RSI"), a.get("kierunek", "ponizej"), a.get("progi"),
+                    a.get("po_ilu", 10), a.get("ile_swiec", 0), a.get("czesc_ucz", 0.7),
+                    a.get("spread_proc", 0.0)))
+            if nazwa == "vgm_zmierz":
+                import pomiar
+                return ok(pomiar.zmierz(
+                    a.get("wskaznik", "RSI"), a.get("prog", 30),
+                    a.get("kierunek", "ponizej"), a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
+            if nazwa == "vgm_sygnal_czy_trend":
+                import pomiar
+                return ok(pomiar.czy_sygnal_czy_trend(
+                    a.get("wskaznik", "Bollinger"), a.get("prog", 90),
+                    a.get("kierunek", "powyzej"), a.get("po_ilu", 10)))
+            if nazwa == "vgm_koszt_a_przewaga":
+                import pomiar
+                return ok(pomiar.koszt_a_przewaga(
+                    a.get("wskaznik", "Bollinger"), a.get("prog", 90),
+                    a.get("kierunek", "powyzej"), a.get("po_ilu", 40),
+                    0, a.get("koszty")))
+            if nazwa == "vgm_jak_dlugo_trzymac":
+                import pomiar
+                return ok(pomiar.jak_dlugo_trzymac(
+                    a.get("wskaznik", "Bollinger"), a.get("prog", 90),
+                    a.get("kierunek", "powyzej"), a.get("dlugosci")))
+            if nazwa == "vgm_odniesienie_trzymanie":
+                import pomiar
+                return ok(pomiar.odniesienie_trzymanie(a.get("po_ilu", 10)))
+            if nazwa == "vgm_przeglad_wskaznikow":
+                import pomiar
+                return ok(pomiar.przeglad_wskaznikow(
+                    a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
+            if nazwa == "vgm_porownaj_progi":
+                import pomiar
+                return ok(pomiar.porownaj_progi(
+                    a.get("progi"), a.get("kierunek", "ponizej"),
+                    a.get("po_ilu", 10), 0, a.get("spread_proc", 0.02)))
+            if nazwa == "vgm_swiece_przedzialy":
+                return ok(analiza.swiece_wiele_przedzialow(
+                    a.get("przedzialy"), a.get("ile", 100)))
+            if nazwa == "vgm_swiece_zmiennosc":
+                return ok(analiza.zmiennosc_swiec(a.get("ile", 200), a.get("okno", 20)))
+            if nazwa == "vgm_wykres_zrzut":
+                return ok(wykres.zrzut(a.get("sciezka"), a.get("zamknij_okna", True)))
+        except wykres.BladWykresu as e:
+            return ok({"blad": str(e), "narzedzie": nazwa,
+                       "podpowiedz": "sprawdź vgm_wykres_zdrowie"})
+
+    return ok({"blad": f"nieznane narzędzie: {nazwa}"})
+
+
+# ── rejestracja w bibliotece mcp ────────────────────────────────────────
+# mcp 1.x rejestruje obsługę dekoratorami, mcp 2.x przez argumenty konstruktora.
+# requirements.txt dopuszcza obie (mcp>=1.0.0), a bez tego rozróżnienia serwer
+# z mcp 2.x nie startował wcale: AttributeError: 'Server' object has no
+# attribute 'list_tools'. Błąd narzędzia idzie z flagą isError, jak każe
+# specyfikacja MCP — klient widzi, że to porażka, a nie wynik.
+def _wynik(tresc: list[TextContent]) -> CallToolResult:
+    return CallToolResult.model_validate({"content": tresc, "isError": _czy_blad(tresc)})
+
+
+if hasattr(Server, "list_tools"):                       # mcp 1.x
+    serwer = Server("vgm-mcp")
+
+    @serwer.list_tools()
+    async def _spis_mcp() -> list[Tool]:
+        return await lista_narzedzi()
+
+    @serwer.call_tool()
+    async def _wywolanie_mcp(nazwa: str, a: dict) -> CallToolResult:
+        return _wynik(await wywolaj(nazwa, a))
+else:                                                   # mcp 2.x
+    async def _spis_mcp(ctx, params) -> ListToolsResult:
+        return ListToolsResult(tools=await lista_narzedzi())
+
+    async def _wywolanie_mcp(ctx, params) -> CallToolResult:
+        return _wynik(await wywolaj(params.name, params.arguments or {}))
+
+    serwer = Server("vgm-mcp", on_list_tools=_spis_mcp, on_call_tool=_wywolanie_mcp)
 
 
 async def main():

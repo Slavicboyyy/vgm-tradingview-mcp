@@ -32,6 +32,17 @@ class BladPomiaru(Exception):
     """Za mało danych albo błędne ustawienia pomiaru."""
 
 
+def _gdy_wszystko_padlo(bledy: list, wierszy: int):
+    """Przegląd złożony z kilku pomiarów: gdy KAŻDY się wywrócił, zgłoś przyczynę.
+
+    Inaczej brak przeglądarki albo za krótka historia kończył się wnioskiem
+    „żaden warunek nie dał przewagi" — brzmi jak wynik pomiaru, a pomiaru
+    w ogóle nie było.
+    """
+    if wierszy and len(bledy) == wierszy:
+        raise bledy[0]
+
+
 def _wynik_po(swiece: list, wejscia: list[int], po_ilu: int,
               spread_proc: float) -> dict:
     """Co się działo po każdym wejściu, licząc w procentach ceny wejścia."""
@@ -291,7 +302,7 @@ def porownaj_progi(progi: list[float] | None = None, kierunek: str = "ponizej",
     To zestawienie pokazuje, gdzie leży granica, zamiast zgadywać.
     """
     progi = progi or [25, 30, 35, 40]
-    wiersze = []
+    wiersze, bledy = [], []
     for prog in progi:
         try:
             w = zmierz_prog("RSI", prog, kierunek, po_ilu, ile_swiec, spread_proc)
@@ -308,7 +319,9 @@ def porownaj_progi(progi: list[float] | None = None, kierunek: str = "ponizej",
                 "dosc_wejsc": c.get("wejsc", 0) >= 20,
             })
         except Exception as e:
+            bledy.append(e)
             wiersze.append({"prog": prog, "blad": str(e)[:60]})
+    _gdy_wszystko_padlo(bledy, len(wiersze))
 
     uzyteczne = [w for w in wiersze
                  if w.get("dosc_wejsc") and w.get("polowy_zgodne")
@@ -549,7 +562,7 @@ def przeglad_wskaznikow(po_ilu: int = 10, ile_swiec: int = 0,
         ("ATR_proc", 0.15, "powyzej"),
     ]
 
-    wiersze = []
+    wiersze, bledy = [], []
     for wsk, prog, kier in zestaw:
         try:
             w = zmierz(wsk, prog, kier, po_ilu, ile_swiec, spread_proc)
@@ -563,7 +576,9 @@ def przeglad_wskaznikow(po_ilu: int = 10, ile_swiec: int = 0,
                 "wniosek": w.get("wniosek", "")[:70],
             })
         except Exception as e:
+            bledy.append(e)
             wiersze.append({"warunek": f"{wsk} {kier} {prog}", "blad": str(e)[:60]})
+    _gdy_wszystko_padlo(bledy, len(wiersze))
 
     przeszly = [w for w in wiersze
                 if w.get("wejsc", 0) >= 20
@@ -732,7 +747,7 @@ def jak_dlugo_trzymac(wskaznik: str = "Bollinger", prog: float = 90,
     odwrotnego.
     """
     dlugosci = dlugosci or [3, 5, 10, 20, 40]
-    wiersze = []
+    wiersze, bledy = [], []
 
     for po in dlugosci:
         try:
@@ -750,7 +765,9 @@ def jak_dlugo_trzymac(wskaznik: str = "Bollinger", prog: float = 90,
                           and (r["rozstep_warunek_odwrotny_pp"] or 0) > 0,
             })
         except Exception as e:
+            bledy.append(e)
             wiersze.append({"po_swiecach": po, "blad": str(e)[:60]})
+    _gdy_wszystko_padlo(bledy, len(wiersze))
 
     dzialajace = [w for w in wiersze if w.get("dziala")]
     najlepszy = (max(dzialajace, key=lambda w: w["nad_trzymaniem_pp"])

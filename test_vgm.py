@@ -143,12 +143,18 @@ def kompletnosc_serwera():
     narzędzie", bo lista kierująca go nie obejmuje. Nic tego nie sygnalizuje —
     spis wygląda kompletnie, testy ścieżkowe przechodzą.
 
-    Tu sprawdzamy sam rozdział wywołań, bez dotykania rynku, żeby test był szybki.
-    Pełny przebieg z prawdziwymi argumentami: .narzedzia/sprawdz_wszystkie.py
+    Wywołujemy każde narzędzie z pustymi argumentami, ale przy zaślepionej
+    sieci i przeglądarce (tests/zaslepki.py). Wcześniej szło to na żywo:
+    puste argumenty wystarczały, żeby vgm_wykres_karta otworzył kartę,
+    vgm_replay_start cofnął wykres w przeszłość, a vgm_przeglad_instrumentow
+    przełączał instrumenty — na przeglądarce użytkownika.
+    Pełne testy z prawdziwymi argumentami: python3 -m pytest tests
     """
     import asyncio
 
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
     import serwer
+    import zaslepki
 
     print("\nkompletność serwera")
 
@@ -167,7 +173,8 @@ def kompletnosc_serwera():
                 brak.append(n)
         return brak
 
-    brak = asyncio.run(bez_obslugi())
+    with zaslepki.podmienione():
+        brak = asyncio.run(bez_obslugi())
     sprawdz("każde narzędzie ma obsługę", not brak,
             "wszystkie" if not brak else f"BEZ OBSŁUGI: {', '.join(brak)}")
 

@@ -50,24 +50,87 @@ class BladWykresu(Exception):
     """Cokolwiek, co uniemożliwia sterowanie wykresem — z czytelnym powodem."""
 
 
+class PrzekroczonyCzas(BladWykresu):
+    """Przeglądarka nie odpowiedziała w limicie — jedyny błąd, który warto ponowić."""
+
+
 def _karta():
+    """Karta z wykresem TradingView, do której da się podłączyć.
+
+    Na liście celów CDP poza kartami są też service workery i ramki z tej samej
+    domeny — bez wykresu. Wybieramy kartę (`type == "page"`), najlepiej z adresem
+    `/chart`. Chrome nie podaje `webSocketDebuggerUrl` karty, do której jest już
+    podpięte inne DevTools; wtedy mówimy to wprost zamiast rzucać KeyError.
+    """
     if websocket is None:
         raise BladWykresu(
             "brakuje pakietu websocket-client — zainstaluj: pip install websocket-client")
     try:
         surowe = urllib.request.urlopen(
             f"http://localhost:{PORT}/json", timeout=10).read()
+        cele = json.loads(surowe)
     except Exception as e:
         raise BladWykresu(
             f"przeglądarka nie odpowiada na porcie {PORT} ({type(e).__name__}). "
             "Uruchom ją z debugowaniem albo ustaw VGM_CDP_PORT."
         ) from e
 
-    for t in json.loads(surowe):
-        if "tradingview.com" in t.get("url", ""):
-            return t
-    raise BladWykresu(
-        "żadna karta nie ma otwartego TradingView — otwórz wykres i spróbuj ponownie")
+    tv = [t for t in cele if isinstance(t, dict) and "tradingview.com" in t.get("url", "")
+          and t.get("type", "page") == "page"]
+    if not tv:
+        raise BladWykresu(
+            "żadna karta nie ma otwartego TradingView — otwórz wykres i spróbuj ponownie")
+    wolne = [t for t in tv if t.get("webSocketDebuggerUrl")]
+    if not wolne:
+        raise BladWykresu(
+            "karta TradingView jest zajęta przez inne narzędzie DevTools — "
+            "zamknij okno DevTools tej karty i spróbuj ponownie")
+    wolne.sort(key=lambda t: "/chart" not in t.get("url", ""))
+    return wolne[0]
+
+
+def _rozmowa(metoda: str, params: dict | None = None, czekaj: float = 25,
+             karta: dict | None = None) -> dict:
+    """Jedno polecenie CDP i jego odpowiedź, z twardym limitem czasu.
+
+    Każdy błąd gniazda zamienia na BladWykresu, a brak odpowiedzi w limicie
+    na PrzekroczonyCzas — nic surowego z biblioteki websocket nie wychodzi
+    wyżej, bo serwer pokazałby to modelowi jako niezrozumiały wyjątek.
+    """
+    k = karta or _karta()
+    _licznik[0] += 1
+    nr = _licznik[0]
+    try:
+        ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=czekaj)
+    except Exception as e:
+        if "timed out" in str(e).lower():
+            raise PrzekroczonyCzas(f"przeglądarka nie przyjęła połączenia w {czekaj}s") from e
+        raise BladWykresu(
+            f"nie udało się połączyć z kartą ({type(e).__name__}: {str(e)[:60]})") from e
+    try:
+        ws.send(json.dumps({"id": nr, "method": metoda, "params": params or {}}))
+        koniec = time.time() + czekaj
+        while time.time() < koniec:
+            o = json.loads(ws.recv())
+            if o.get("id") == nr:
+                if "error" in o:
+                    raise BladWykresu(
+                        f"przeglądarka odrzuciła {metoda}: "
+                        f"{(o['error'] or {}).get('message', o['error'])}"[:200])
+                return o.get("result", {})
+        raise PrzekroczonyCzas(f"przeglądarka nie odpowiedziała w {czekaj}s")
+    except BladWykresu:
+        raise
+    except Exception as e:
+        # timeout gniazda przychodzi jako wyjątek biblioteki, nie nasz
+        if "timed out" in str(e).lower():
+            raise PrzekroczonyCzas(f"przeglądarka nie odpowiedziała w {czekaj}s") from e
+        raise BladWykresu(f"{type(e).__name__}: {str(e)[:70]}") from e
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
 
 
 def _wykonaj(kod: str, czekaj: float = 25, prob: int = 2):
@@ -75,57 +138,32 @@ def _wykonaj(kod: str, czekaj: float = 25, prob: int = 2):
 
     Zmierzone: gdy przeglądarka ma kilkadziesiąt kart, pojedyncze wywołanie
     potrafi przekroczyć czas mimo działającej strony. Jedno ponowienie
-    z dłuższym limitem wystarcza.
+    z dłuższym limitem wystarcza. Ponawiamy tylko przekroczenie czasu —
+    brak karty czy wyjątek na stronie za drugim razem wyglądałby tak samo.
     """
     ostatni = None
     for i in range(prob):
         try:
             return _wykonaj_raz(kod, czekaj * (1 + i))
-        except (BladWykresu, OSError) as e:
+        except PrzekroczonyCzas as e:
             ostatni = e
-            if "przekroczy" in str(e).lower() or "timed out" in str(e).lower():
+            if i < prob - 1:
                 time.sleep(2)
-                continue
-            raise
-        except Exception as e:
-            # timeout gniazda przychodzi jako wyjątek biblioteki, nie nasz
-            ostatni = e
-            if "timed out" in str(e).lower():
-                time.sleep(2)
-                continue
-            raise BladWykresu(f"{type(e).__name__}: {str(e)[:70]}") from e
-    raise BladWykresu(
+    raise PrzekroczonyCzas(
         f"przeglądarka nie odpowiedziała po {prob} próbach: {str(ostatni)[:60]}")
 
 
 def _wykonaj_raz(kod: str, czekaj: float = 25):
-    k = _karta()
-    _licznik[0] += 1
-    nr = _licznik[0]
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=czekaj)
-    try:
-        ws.send(json.dumps({
-            "id": nr,
-            "method": "Runtime.evaluate",
-            "params": {"expression": kod, "returnByValue": True, "awaitPromise": True},
-        }))
-        koniec = time.time() + czekaj
-        while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") != nr:
-                continue
-            r = o.get("result", {})
-            if "exceptionDetails" in r:
-                # samo "text" to zwykle gołe "Uncaught" — prawdziwy komunikat
-                # siedzi w exception.description; bez niego każda diagnoza jest ślepa
-                ed = r["exceptionDetails"]
-                opis = ((ed.get("exception") or {}).get("description")
-                        or ed.get("text") or "błąd w przeglądarce")
-                raise BladWykresu(str(opis).splitlines()[0][:220])
-            return r.get("result", {}).get("value")
-        raise BladWykresu(f"przeglądarka nie odpowiedziała w {czekaj}s")
-    finally:
-        ws.close()
+    r = _rozmowa("Runtime.evaluate",
+                 {"expression": kod, "returnByValue": True, "awaitPromise": True}, czekaj)
+    if "exceptionDetails" in r:
+        # samo "text" to zwykle gołe "Uncaught" — prawdziwy komunikat
+        # siedzi w exception.description; bez niego każda diagnoza jest ślepa
+        ed = r["exceptionDetails"]
+        opis = ((ed.get("exception") or {}).get("description")
+                or ed.get("text") or "błąd w przeglądarce")
+        raise BladWykresu(str(opis).splitlines()[0][:220])
+    return r.get("result", {}).get("value")
 
 
 def _na_wykresie(cialo: str) -> str:
@@ -320,6 +358,8 @@ def swiece(ile: int = 100) -> dict:
         }}
         return {{dostepnych: b.size(), zwrocono: out.length, swiece: out}};
     """), czekaj=40))
+    if not isinstance(w, dict):
+        raise BladWykresu("wykres nie zwrócił świec — strona mogła się jeszcze nie wczytać")
 
     nazwane = []
     for s in w.get("swiece", []):
@@ -360,31 +400,20 @@ def zrzut(sciezka: str | None = None, zamknij_okna: bool = True) -> dict:
             pass  # zamykanie okien to wygoda, nie warunek
 
     k = _karta()
-    _licznik[0] += 1
-    nr = _licznik[0]
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=45)
+    d = _rozmowa("Page.captureScreenshot", {"format": "png"}, 45, karta=k).get("data")
+    if not d:
+        raise BladWykresu("przeglądarka nie zwróciła obrazu")
+    surowe = base64.b64decode(d)
     try:
-        ws.send(json.dumps({"id": nr, "method": "Page.captureScreenshot",
-                            "params": {"format": "png"}}))
-        koniec = time.time() + 45
-        while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") != nr:
-                continue
-            d = o.get("result", {}).get("data")
-            if not d:
-                raise BladWykresu("przeglądarka nie zwróciła obrazu")
-            surowe = base64.b64decode(d)
-            if sciezka is None:
-                sciezka = tempfile.NamedTemporaryFile(
-                    suffix=".png", delete=False, prefix="vgm-wykres-").name
-            p = pathlib.Path(sciezka)
-            p.write_bytes(surowe)
-            return {"plik": str(p), "bajtow": len(surowe),
-                    "tytul": k.get("title", "")[:70]}
-        raise BladWykresu("przeglądarka nie odpowiedziała w 45s")
-    finally:
-        ws.close()
+        if sciezka is None:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False,
+                                             prefix="vgm-wykres-") as t:
+                sciezka = t.name
+        p = pathlib.Path(sciezka)
+        p.write_bytes(surowe)
+    except OSError as e:
+        raise BladWykresu(f"nie udało się zapisać obrazu: {type(e).__name__}: {e}"[:200]) from e
+    return {"plik": str(p), "bajtow": len(surowe), "tytul": k.get("title", "")[:70]}
 
 
 def wartosci() -> list:
@@ -533,20 +562,7 @@ def czekaj_na_dane(symbol: str, sekund: float = 25, tolerancja: float = 0.05) ->
 
 def _przejdz(url: str):
     """Przeładowuje kartę pod wskazany adres."""
-    k = _karta()
-    _licznik[0] += 1
-    nr = _licznik[0]
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=30)
-    try:
-        ws.send(json.dumps({"id": nr, "method": "Page.navigate",
-                            "params": {"url": url}}))
-        koniec = time.time() + 20
-        while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") == nr:
-                return
-    finally:
-        ws.close()
+    _rozmowa("Page.navigate", {"url": url}, 20)
 
 
 # Ile sekund powinno dzielić dwie sąsiednie świece przy danym przedziale.
@@ -563,15 +579,21 @@ def sprawdz_przedzial(interwal: str, tolerancja: float = 0.2) -> dict:
     Zmierzone: `setResolution` zmienia nazwę przedziału natychmiast, ale świece
     potrafią zostać z poprzedniego. Wykres pokazuje wtedy "1D", a odstęp między
     świecami wynosi godzinę. Sama nazwa nie wystarcza, trzeba zmierzyć odstęp.
+
+    Mierzymy najmniejszy odstęp z kilku ostatnich par, nie z jednej: między
+    piątkiem a poniedziałkiem jest weekend, więc w poniedziałek ostatnia para
+    świec dziennych (i godzinowych tuż po otwarciu) ma odstęp kilku dni i
+    wyglądała jak zły przedział — przełączenie kończyło się przeładowaniem
+    strony i niepotwierdzonymi danymi. Przerwa może tylko wydłużyć odstęp,
+    więc minimum z kilku par to właściwy przedział.
     """
-    oczekiwany = ODSTEP_SEKUND.get(str(interwal).upper().lstrip("1")
-                                   if str(interwal).upper() in ("1D", "1W")
-                                   else str(interwal))
+    klucz = str(interwal).strip().upper()
+    oczekiwany = ODSTEP_SEKUND.get(klucz)
     if oczekiwany is None:
         return {"potwierdzone": None, "powod": f"nie znam odstępu dla {interwal}"}
 
     try:
-        w = swiece(3)
+        w = swiece(6)
     except BladWykresu as e:
         return {"potwierdzone": False, "powod": str(e)[:70]}
 
@@ -579,7 +601,10 @@ def sprawdz_przedzial(interwal: str, tolerancja: float = 0.2) -> dict:
     if len(s) < 2:
         return {"potwierdzone": False, "powod": "za mało świec do zmierzenia odstępu"}
 
-    faktyczny = s[-1]["czas"] - s[-2]["czas"]
+    odstepy = [b["czas"] - a["czas"] for a, b in zip(s, s[1:]) if b["czas"] > a["czas"]]
+    if not odstepy:
+        return {"potwierdzone": False, "powod": "świece nie mają rosnącego czasu"}
+    faktyczny = min(odstepy)
     zgadza = abs(faktyczny - oczekiwany) / oczekiwany <= tolerancja
 
     return {

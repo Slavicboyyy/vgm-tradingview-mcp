@@ -317,6 +317,19 @@ python3 src/pola.py      # sprawdza, czy wszystkie 91 pól nadal działają
 Ostatnie polecenie warto puścić, kiedy coś zacznie zwracać puste wartości. Powie,
 która grupa pól przestała odpowiadać.
 
+Testy integracyjne bez sieci i bez przeglądarki:
+
+```bash
+pip install -r requirements-test.txt
+python3 -m pytest tests
+```
+
+Klient MCP łączy się z serwerem w pamięci i woła każde z 63 narzędzi, a TradingView
+i przeglądarkę z CDP zastępują zaślepki z `tests/zaslepki.py`. Sprawdzają też
+przypadki błędów (odmowa 403/429, zła nazwa, brak karty, wyjątek na stronie,
+zerwane gniazdo) i limity czasu — zegar jest umowny, więc cały zestaw trwa kilka
+sekund. Serwer działa z `mcp` 1.x i 2.x.
+
 ---
 
 ## Przykłady

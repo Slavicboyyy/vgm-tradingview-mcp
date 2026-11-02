@@ -41,22 +41,14 @@ def _odczekaj():
 
 
 def ciasteczka() -> list[dict]:
-    """Wszystkie ciasteczka TradingView z przeglądarki, łącznie z HttpOnly."""
-    import websocket
+    """Wszystkie ciasteczka TradingView z przeglądarki, łącznie z HttpOnly.
 
-    k = wykres._karta()
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=30)
-    try:
-        ws.send(json.dumps({"id": 1, "method": "Network.getCookies",
-                            "params": {"urls": ["https://www.tradingview.com"]}}))
-        koniec = time.time() + 20
-        while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") == 1:
-                return o.get("result", {}).get("cookies", [])
-    finally:
-        ws.close()
-    raise BladSesji("przeglądarka nie oddała ciasteczek w 20 s")
+    Problemy z przeglądarką (brak karty, cisza, zerwane gniazdo) wychodzą jako
+    `wykres.BladWykresu` — tak samo jak w narzędziach wykresu.
+    """
+    r = wykres._rozmowa("Network.getCookies",
+                        {"urls": ["https://www.tradingview.com"]}, 20)
+    return r.get("cookies", [])
 
 
 def czy_zalogowany() -> dict:
@@ -105,6 +97,9 @@ def _pobierz(url: str) -> object:
         if e.code == 429:
             raise BladSesji("za dużo zapytań (429) — zatrzymuję się, nie ponawiam") from e
         raise BladSesji(f"HTTP {e.code} przy {url[:60]}") from e
+    except Exception as e:
+        # brak sieci, limit czasu, odpowiedź, która nie jest JSON-em
+        raise BladSesji(f"{type(e).__name__}: {str(e)[:80]} przy {url[:60]}") from e
 
 
 def alerty() -> dict:

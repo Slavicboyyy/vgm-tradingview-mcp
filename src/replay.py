@@ -69,9 +69,14 @@ def _na_milisekundy(data) -> int:
     sekund wrzuca wykres na pierwszą dostępną świecę w historii
     (zmierzone: EURUSD skakał na 2001-11-28 zamiast na podaną datę).
     """
+    if isinstance(data, bool):
+        raise BladReplay(f"nie rozumiem daty: {data} — podaj YYYY-MM-DD albo sekundy")
     if isinstance(data, (int, float)):
         return int(data) * 1000
     t = str(data).strip()
+    # Schemat narzędzia przyjmuje tekst, więc sekundy też przychodzą jako tekst.
+    if t.isdigit():
+        return int(t) * 1000
     for wzor in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return int(datetime.strptime(t, wzor).replace(tzinfo=timezone.utc).timestamp()) * 1000
