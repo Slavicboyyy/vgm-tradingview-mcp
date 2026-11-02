@@ -3,3 +3,4 @@ __pycache__/
 .env
 .venv/
 wydanie/
+.mypy_cache/

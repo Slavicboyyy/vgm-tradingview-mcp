@@ -1,0 +1,26 @@
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+files = ["src"]
+explicit_package_bases = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = ["websocket", "websocket.*"]
+ignore_missing_imports = true
+
+# Serwer pisany pod API mcp 1.x (dekoratory list_tools/call_tool); typy mcp nie
+# są sprawdzane, żeby wynik nie zależał od zainstalowanej wersji pakietu.
+[[tool.mypy.overrides]]
+module = ["mcp", "mcp.*"]
+ignore_missing_imports = true
+follow_imports = "skip"

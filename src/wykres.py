@@ -11,6 +11,7 @@ aktualizacji — dlatego `zdrowie()` sprawdza dostępność, zanim cokolwiek zro
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import time
@@ -18,15 +19,21 @@ import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import walidacja as wal  # noqa: E402
 
+if TYPE_CHECKING:  # same typy, bez wymogu ścieżki przy imporcie
+    from typy import Json, Swieca
+
+websocket: Any
 try:
-    import websocket
+    websocket = importlib.import_module("websocket")
 except ImportError:  # pragma: no cover
     websocket = None
+
 
 def _wykryj_port() -> int:
     """Port CDP: ze zmiennej VGM_CDP_PORT, a bez niej pierwszy, który odpowiada.
@@ -72,7 +79,7 @@ def _to_tradingview(url: str) -> bool:
     return u.scheme == "https" and (h == "tradingview.com" or h.endswith(".tradingview.com"))
 
 
-def _karta():
+def _karta() -> Json:
     if websocket is None:
         raise BladWykresu(
             "brakuje pakietu websocket-client — zainstaluj: pip install websocket-client")
@@ -87,19 +94,20 @@ def _karta():
 
     for t in json.loads(surowe):
         if t.get("type", "page") == "page" and _to_tradingview(t.get("url", "")):
-            return t
+            karta: Json = t
+            return karta
     raise BladWykresu(
         "żadna karta nie ma otwartego TradingView — otwórz wykres i spróbuj ponownie")
 
 
-def _wykonaj(kod: str, czekaj: float = 25, prob: int = 2):
+def _wykonaj(kod: str, czekaj: float = 25, prob: int = 2) -> Any:
     """Wykonuje kod na karcie. Przy przeciążonej przeglądarce ponawia raz.
 
     Zmierzone: gdy przeglądarka ma kilkadziesiąt kart, pojedyncze wywołanie
     potrafi przekroczyć czas mimo działającej strony. Jedno ponowienie
     z dłuższym limitem wystarcza.
     """
-    ostatni = None
+    ostatni: Exception | None = None
     for i in range(prob):
         try:
             return _wykonaj_raz(kod, czekaj * (1 + i))
@@ -120,34 +128,44 @@ def _wykonaj(kod: str, czekaj: float = 25, prob: int = 2):
         f"przeglądarka nie odpowiedziała po {prob} próbach: {str(ostatni)[:60]}")
 
 
-def _wykonaj_raz(kod: str, czekaj: float = 25):
+def _cdp(metoda: str, parametry: Json, polaczenie_s: float,
+         czekaj_s: float) -> tuple[Json | None, Json]:
+    """Jedno polecenie CDP na aktywnej karcie: (odpowiedź albo None po czasie, karta).
+
+    `polaczenie_s` to limit gniazda (dotyczy też pojedynczego `recv`),
+    `czekaj_s` to limit na samą odpowiedź na nasze polecenie.
+    """
     k = _karta()
     _licznik[0] += 1
     nr = _licznik[0]
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=czekaj)
+    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=polaczenie_s)
     try:
-        ws.send(json.dumps({
-            "id": nr,
-            "method": "Runtime.evaluate",
-            "params": {"expression": kod, "returnByValue": True, "awaitPromise": True},
-        }))
-        koniec = time.time() + czekaj
+        ws.send(json.dumps({"id": nr, "method": metoda, "params": parametry}))
+        koniec = time.time() + czekaj_s
         while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") != nr:
-                continue
-            r = o.get("result", {})
-            if "exceptionDetails" in r:
-                # samo "text" to zwykle gołe "Uncaught" — prawdziwy komunikat
-                # siedzi w exception.description; bez niego każda diagnoza jest ślepa
-                ed = r["exceptionDetails"]
-                opis = ((ed.get("exception") or {}).get("description")
-                        or ed.get("text") or "błąd w przeglądarce")
-                raise BladWykresu(str(opis).splitlines()[0][:220])
-            return r.get("result", {}).get("value")
-        raise BladWykresu(f"przeglądarka nie odpowiedziała w {czekaj}s")
+            o: Json = json.loads(ws.recv())
+            if o.get("id") == nr:
+                return o, k
+        return None, k
     finally:
         ws.close()
+
+
+def _wykonaj_raz(kod: str, czekaj: float = 25) -> Any:
+    o, _ = _cdp("Runtime.evaluate",
+             {"expression": kod, "returnByValue": True, "awaitPromise": True},
+             czekaj, czekaj)
+    if o is None:
+        raise BladWykresu(f"przeglądarka nie odpowiedziała w {czekaj}s")
+    r = o.get("result", {})
+    if "exceptionDetails" in r:
+        # samo "text" to zwykle gołe "Uncaught" — prawdziwy komunikat
+        # siedzi w exception.description; bez niego każda diagnoza jest ślepa
+        ed = r["exceptionDetails"]
+        opis = ((ed.get("exception") or {}).get("description")
+                or ed.get("text") or "błąd w przeglądarce")
+        raise BladWykresu(str(opis).splitlines()[0][:220])
+    return r.get("result", {}).get("value")
 
 
 def _na_wykresie(cialo: str) -> str:
@@ -165,16 +183,50 @@ def _na_wykresie(cialo: str) -> str:
     """
 
 
-def _sprawdz(w):
+def _sprawdz(w: Any, wyjatek: type[Exception] = BladWykresu) -> Any:
     if isinstance(w, dict) and "blad" in w:
-        raise BladWykresu(w["blad"])
+        raise wyjatek(w["blad"])
     return w
 
 
+def uruchom(prolog: str, kod: str, czekaj: float,
+            wyjatek: type[Exception] = BladWykresu) -> Any:
+    """Wykonuje `kod` poprzedzony `prolog` w funkcji natychmiastowej.
+
+    Wspólne dla układu i odtwarzania: wynik z kluczem `blad` staje się
+    wyjątkiem podanego typu.
+    """
+    return _sprawdz(_wykonaj("(function(){" + prolog + kod + "})()", czekaj=czekaj),
+                    wyjatek)
+
+
+def _na(cialo: str, czekaj: float = 25) -> Any:
+    """Kod z `cialo` na aktywnym wykresie; `blad` w wyniku rzuca BladWykresu."""
+    return _sprawdz(_wykonaj(_na_wykresie(cialo), czekaj=czekaj))
+
+
+def _na_slownik(cialo: str, czekaj: float = 25) -> Json:
+    w: Json = _na(cialo, czekaj)
+    return w
+
+
+def _na_liste(cialo: str, czekaj: float = 25) -> list[Json]:
+    w: list[Json] = _na(cialo, czekaj)
+    return w
+
+
+def _adres_wykresu(symbol: str, interwal: str | None) -> str:
+    """Adres wykresu z symbolem i interwałem — oba sprawdzone, zanim trafią do URL."""
+    adres = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(wal.symbol(symbol))}"
+    if interwal:
+        adres += f"&interval={urllib.parse.quote(wal.interwal(interwal))}"
+    return adres
+
+
 # ── odczyt ──────────────────────────────────────────────────────────────
-def zdrowie() -> dict:
+def zdrowie() -> Json:
     """Czy da się sterować wykresem — sprawdź to przed resztą."""
-    wynik = {"port": PORT, "przegladarka": False, "karta_tv": False,
+    wynik: Json = {"port": PORT, "przegladarka": False, "karta_tv": False,
              "api_wykresu": False, "gotowy": False}
     try:
         k = _karta()
@@ -201,17 +253,14 @@ def zdrowie() -> dict:
 
 
 def otworz_karte(symbol: str = "FX:EURUSD", interwal: str | None = None,
-                 sekund: float = 20) -> dict:
+                 sekund: float = 20) -> Json:
     """Otwiera nową kartę z wykresem, gdy żadna nie jest otwarta.
 
     Karta potrafi zniknąć: ktoś ją zamknie, przeglądarka ją ubije przy
     przeciążeniu, sesja się skończy. Bez tego każde narzędzie wykresu
     przestaje działać, choć nic nie jest zepsute.
     """
-    symbol = wal.symbol(symbol)
-    adres = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(symbol)}"
-    if interwal:
-        adres += f"&interval={urllib.parse.quote(wal.interwal(interwal))}"
+    adres = _adres_wykresu(symbol, interwal)
 
     zad = urllib.request.Request(f"http://localhost:{PORT}/json/new?{adres}",
                                  method="PUT")
@@ -238,7 +287,7 @@ def otworz_karte(symbol: str = "FX:EURUSD", interwal: str | None = None,
             "powod": f"karta powstała, ale wykres nie wczytał się w {sekund}s"}
 
 
-def zapewnij_karte(symbol: str = "FX:EURUSD") -> dict:
+def zapewnij_karte(symbol: str = "FX:EURUSD") -> Json:
     """Sprawdza wykres i otwiera kartę, gdy jej nie ma. Nic nie robi, gdy jest."""
     z = zdrowie()
     if z.get("gotowy"):
@@ -246,9 +295,9 @@ def zapewnij_karte(symbol: str = "FX:EURUSD") -> dict:
     return {"bylo_gotowe": False, **otworz_karte(symbol)}
 
 
-def stan() -> dict:
+def stan() -> Json:
     """Co jest teraz na wykresie: instrument, przedział czasu, typ, wskaźniki."""
-    return _sprawdz(_wykonaj(_na_wykresie("""
+    return _na_slownik("""
         var st = [];
         try {
           st = ch.getAllStudies().map(function(s){
@@ -268,56 +317,56 @@ def stan() -> dict:
           wskazniki: st,
           rysunki: ks
         };
-    """)))
+    """)
 
 
-def wskazniki() -> list:
+def wskazniki() -> list[Json]:
     """Lista wskaźników wiszących na wykresie."""
-    return _sprawdz(_wykonaj(_na_wykresie("""
+    return _na_liste("""
         return ch.getAllStudies().map(function(s){
           return {id: s.id, nazwa: s.name || s.title || '?'};
         });
-    """)))
+    """)
 
 
-def rysunki() -> list:
+def rysunki() -> list[Json]:
     """Lista rysunków na wykresie: linie, poziomy, kształty."""
-    return _sprawdz(_wykonaj(_na_wykresie("""
+    return _na_liste("""
         return ch.getAllShapes().map(function(s){
           return {id: s.id, nazwa: s.name || '?'};
         });
-    """)))
+    """)
 
 
 # ── zmiany ──────────────────────────────────────────────────────────────
-def ustaw_symbol(symbol: str) -> dict:
+def ustaw_symbol(symbol: str) -> Json:
     """Zmienia instrument na wykresie."""
     s = json.dumps(wal.symbol(symbol))
-    return _sprawdz(_wykonaj(_na_wykresie(f"""
+    return _na_slownik(f"""
         ch.setSymbol({s});
         return {{ok: true, symbol: {s}}};
-    """)))
+    """)
 
 
-def ustaw_interwal(interwal: str) -> dict:
+def ustaw_interwal(interwal: str) -> Json:
     """Zmienia przedział czasu. Przyjmuje 1, 5, 15, 60, 240, D, W, M."""
     i = json.dumps(wal.interwal(interwal))
-    return _sprawdz(_wykonaj(_na_wykresie(f"""
+    return _na_slownik(f"""
         ch.setResolution({i});
         return {{ok: true, interwal: {i}}};
-    """)))
+    """)
 
 
-def ustaw_typ(typ: int) -> dict:
+def ustaw_typ(typ: int) -> Json:
     """Zmienia typ wykresu. 0 słupki, 1 świece, 3 linia, 9 Heikin Ashi."""
     typ = wal.calkowita(typ, "typ", 0, 30)
-    return _sprawdz(_wykonaj(_na_wykresie(f"""
+    return _na_slownik(f"""
         ch.setChartType({typ});
         return {{ok: true, typ: {typ}}};
-    """)))
+    """)
 
 
-def swiece(ile: int = 100) -> dict:
+def swiece(ile: int = 100) -> Json:
     """Świece historyczne z wykresu: czas, otwarcie, szczyt, dołek, zamknięcie, wolumen.
 
     Bierze je z serii, którą wykres i tak ma wczytaną, więc nie potrzeba osobnego
@@ -325,7 +374,7 @@ def swiece(ile: int = 100) -> dict:
     wykres zdążył wczytać — zwykle kilkaset.
     """
     n = wal.calkowita(ile, "ile", 1, 5000)
-    w = _sprawdz(_wykonaj(_na_wykresie(f"""
+    w = _na(f"""
         var cw = ch._chartWidget;
         if (!cw) return {{blad: 'brak dostępu do modelu wykresu'}};
         var zrodla = cw.model().model().dataSources();
@@ -343,9 +392,9 @@ def swiece(ile: int = 100) -> dict:
           if (v) out.push(v);
         }}
         return {{dostepnych: b.size(), zwrocono: out.length, swiece: out}};
-    """), czekaj=40))
+    """, czekaj=40)
 
-    nazwane = []
+    nazwane: list[Swieca] = []
     for s in w.get("swiece", []):
         if len(s) >= 5:
             nazwane.append({
@@ -356,7 +405,7 @@ def swiece(ile: int = 100) -> dict:
     return {"dostepnych": w.get("dostepnych"), "zwrocono": len(nazwane), "swiece": nazwane}
 
 
-def zrzut(sciezka: str | None = None, zamknij_okna: bool = True) -> dict:
+def zrzut(sciezka: str | None = None, zamknij_okna: bool = True) -> Json:
     """Zapisuje obraz wykresu do pliku PNG.
 
     Dzięki temu model może wykres OBEJRZEĆ, nie tylko odczytać z niego liczby.
@@ -391,41 +440,29 @@ def zrzut(sciezka: str | None = None, zamknij_okna: bool = True) -> dict:
         except BladWykresu:
             pass  # zamykanie okien to wygoda, nie warunek
 
-    k = _karta()
-    _licznik[0] += 1
-    nr = _licznik[0]
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=45)
-    try:
-        ws.send(json.dumps({"id": nr, "method": "Page.captureScreenshot",
-                            "params": {"format": "png"}}))
-        koniec = time.time() + 45
-        while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") != nr:
-                continue
-            d = o.get("result", {}).get("data")
-            if not d:
-                raise BladWykresu("przeglądarka nie zwróciła obrazu")
-            surowe = base64.b64decode(d)
-            if sciezka is None:
-                sciezka = tempfile.NamedTemporaryFile(
-                    suffix=".png", delete=False, prefix="vgm-wykres-").name
-            p = pathlib.Path(sciezka)
-            p.write_bytes(surowe)
-            return {"plik": str(p), "bajtow": len(surowe),
-                    "tytul": k.get("title", "")[:70]}
+    o, k = _cdp("Page.captureScreenshot", {"format": "png"}, 45, 45)
+    if o is None:
         raise BladWykresu("przeglądarka nie odpowiedziała w 45s")
-    finally:
-        ws.close()
+    d = o.get("result", {}).get("data")
+    if not d:
+        raise BladWykresu("przeglądarka nie zwróciła obrazu")
+    surowe = base64.b64decode(d)
+    if sciezka is None:
+        sciezka = tempfile.NamedTemporaryFile(
+            suffix=".png", delete=False, prefix="vgm-wykres-").name
+    p = pathlib.Path(sciezka)
+    p.write_bytes(surowe)
+    return {"plik": str(p), "bajtow": len(surowe),
+            "tytul": k.get("title", "")[:70]}
 
 
-def wartosci() -> list:
+def wartosci() -> list[Json]:
     """Bieżące wartości wszystkich wskaźników NA WYKRESIE.
 
     To jest powód, dla którego warstwa przeglądarki w ogóle istnieje: czyta
     również wskaźniki własne, napisane w Pine, których publiczne API nie zna.
     """
-    return _sprawdz(_wykonaj(_na_wykresie("""
+    return _na_liste("""
         var cw = ch._chartWidget;
         if (!cw) return {blad: 'brak dostępu do modelu wykresu'};
         var zrodla = cw.model().model().dataSources();
@@ -447,11 +484,11 @@ def wartosci() -> list:
           } catch(e) {}
         }
         return wynik;
-    """)))
+    """)
 
 
 def dodaj_wskaznik(nazwa: str, czekaj_na_dane: bool = True,
-                   sekund: float = 12) -> dict:
+                   sekund: float = 12) -> Json:
     """Dodaje wskaźnik na wykres po pełnej nazwie.
 
     Nazwa musi być dokładna, tak jak w oknie wyboru wskaźników TradingView,
@@ -470,12 +507,12 @@ def dodaj_wskaznik(nazwa: str, czekaj_na_dane: bool = True,
     """
     nazwa = wal.tekst(nazwa, "nazwa", 120)
     n = json.dumps(nazwa)
-    w = _sprawdz(_wykonaj(_na_wykresie(f"""
+    w: Json = _na(f"""
         var cel = (ch._chartWidget && ch._chartWidget.createStudy) ? ch._chartWidget : ch;
         if (!cel.createStudy) return {{blad: 'ta wersja strony nie pozwala dodać wskaźnika'}};
         cel.createStudy({n}, false, false, []);
         return {{ok: true, dodano: {n}}};
-    """)))
+    """)
     time.sleep(2)
 
     if not czekaj_na_dane:
@@ -503,10 +540,10 @@ def dodaj_wskaznik(nazwa: str, czekaj_na_dane: bool = True,
                       "Druga możliwa przyczyna: dodany, zanim wykres wczytał świece.")}
 
 
-def usun_wskaznik(identyfikator: str) -> dict:
+def usun_wskaznik(identyfikator: str) -> Json:
     """Usuwa jeden wskaźnik po identyfikatorze z `wskazniki()`."""
     i = json.dumps(wal.identyfikator(identyfikator))
-    return _sprawdz(_wykonaj(_na_wykresie(f"""
+    return _na_slownik(f"""
         var lista = ch.getAllStudies();
         for (var k = 0; k < lista.length; k++) {{
           if (lista[k].id === {i}) {{
@@ -515,10 +552,10 @@ def usun_wskaznik(identyfikator: str) -> dict:
           }}
         }}
         return {{blad: 'nie ma wskaźnika o takim identyfikatorze'}};
-    """)))
+    """)
 
 
-def czekaj_na_dane(symbol: str, sekund: float = 25, tolerancja: float = 0.05) -> dict:
+def czekaj_na_dane(symbol: str, sekund: float = 25, tolerancja: float = 0.05) -> Json:
     """Czeka, aż świece na wykresie naprawdę należą do podanego instrumentu.
 
     Zmierzone zachowanie TradingView: po zmianie symbolu `ch.symbol()` i nazwa
@@ -564,22 +601,9 @@ def czekaj_na_dane(symbol: str, sekund: float = 25, tolerancja: float = 0.05) ->
             "cena_wykresu": ostatnia, "cena_odniesienia": odn}
 
 
-def _przejdz(url: str):
+def _przejdz(url: str) -> None:
     """Przeładowuje kartę pod wskazany adres."""
-    k = _karta()
-    _licznik[0] += 1
-    nr = _licznik[0]
-    ws = websocket.create_connection(k["webSocketDebuggerUrl"], timeout=30)
-    try:
-        ws.send(json.dumps({"id": nr, "method": "Page.navigate",
-                            "params": {"url": url}}))
-        koniec = time.time() + 20
-        while time.time() < koniec:
-            o = json.loads(ws.recv())
-            if o.get("id") == nr:
-                return
-    finally:
-        ws.close()
+    _cdp("Page.navigate", {"url": url}, 30, 20)
 
 
 # Ile sekund powinno dzielić dwie sąsiednie świece przy danym przedziale.
@@ -590,7 +614,7 @@ ODSTEP_SEKUND = {
 }
 
 
-def sprawdz_przedzial(interwal: str, tolerancja: float = 0.2) -> dict:
+def sprawdz_przedzial(interwal: str, tolerancja: float = 0.2) -> Json:
     """Czy świece naprawdę mają odstęp odpowiadający przedziałowi.
 
     Zmierzone: `setResolution` zmienia nazwę przedziału natychmiast, ale świece
@@ -626,7 +650,7 @@ def sprawdz_przedzial(interwal: str, tolerancja: float = 0.2) -> dict:
     }
 
 
-def przelacz(symbol: str, interwal: str | None = None, sekund: float = 30) -> dict:
+def przelacz(symbol: str, interwal: str | None = None, sekund: float = 30) -> Json:
     """Zmienia instrument i CZEKA na jego prawdziwe dane.
 
     Używaj tego zamiast samego `ustaw_symbol`, gdy zaraz potem czytasz świece.
@@ -661,10 +685,7 @@ def przelacz(symbol: str, interwal: str | None = None, sekund: float = 30) -> di
                 "odstep_swiec_s": p_info.get("odstep_faktyczny_s")}
 
     # dane nie nadążyły — przeładowanie z symbolem w adresie
-    adres = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(symbol)}"
-    if interwal:
-        adres += f"&interval={urllib.parse.quote(str(interwal))}"
-    _przejdz(adres)
+    _przejdz(_adres_wykresu(symbol, interwal))
     time.sleep(12)
 
     w2 = czekaj_na_dane(symbol, sekund)
@@ -677,7 +698,7 @@ def przelacz(symbol: str, interwal: str | None = None, sekund: float = 30) -> di
                             and p2.get("potwierdzone") is not False}
 
 
-def _demo():
+def _demo() -> int:
     print("1. zdrowie")
     z = zdrowie()
     for k, v in z.items():

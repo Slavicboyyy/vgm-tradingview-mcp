@@ -14,7 +14,11 @@ import math
 import os
 import re
 import tempfile
+from collections.abc import Callable, Collection
 from pathlib import Path
+from typing import Any, TypeVar
+
+T = TypeVar("T")
 
 
 class BladWejscia(ValueError):
@@ -44,7 +48,7 @@ def _bez_sterujacych(t: str) -> bool:
 
 
 # ── liczby ──────────────────────────────────────────────────────────────
-def liczba(x, nazwa: str, min_: float, max_: float) -> float:
+def liczba(x: object, nazwa: str, min_: float, max_: float) -> float:
     """Skończona liczba z przedziału. Odrzuca NaN, nieskończoność, bool i tekst."""
     if isinstance(x, bool) or not isinstance(x, (int, float)):
         raise BladWejscia(f"{nazwa}: oczekiwano liczby, jest {type(x).__name__}")
@@ -55,7 +59,7 @@ def liczba(x, nazwa: str, min_: float, max_: float) -> float:
     return x
 
 
-def calkowita(x, nazwa: str, min_: int, max_: int) -> int:
+def calkowita(x: object, nazwa: str, min_: int, max_: int) -> int:
     """Liczba całkowita z przedziału. Float przyjmuje tylko, gdy jest całkowity."""
     if isinstance(x, float) and math.isfinite(x) and x == int(x):
         x = int(x)
@@ -67,14 +71,14 @@ def calkowita(x, nazwa: str, min_: int, max_: int) -> int:
 
 
 # ── teksty ──────────────────────────────────────────────────────────────
-def symbol(x, nazwa: str = "symbol") -> str:
+def symbol(x: object, nazwa: str = "symbol") -> str:
     if not isinstance(x, str) or not _SYMBOL.match(x):
         raise BladWejscia(f"{nazwa}: niedozwolone znaki albo zła długość "
                           "(oczekiwano np. FX:EURUSD)")
     return x
 
 
-def interwal(x, nazwa: str = "interwal") -> str:
+def interwal(x: object, nazwa: str = "interwal") -> str:
     if isinstance(x, int) and not isinstance(x, bool):
         x = str(x)
     if not isinstance(x, str) or not _INTERWAL.match(x):
@@ -82,26 +86,26 @@ def interwal(x, nazwa: str = "interwal") -> str:
     return x
 
 
-def pole(x, nazwa: str = "pole") -> str:
+def pole(x: object, nazwa: str = "pole") -> str:
     if not isinstance(x, str) or not _POLE.match(x):
         raise BladWejscia(f"{nazwa}: niedozwolone znaki albo zła długość")
     return x
 
 
-def identyfikator(x, nazwa: str = "id") -> str:
+def identyfikator(x: object, nazwa: str = "id") -> str:
     if not isinstance(x, str) or not _ID.match(x):
         raise BladWejscia(f"{nazwa}: niedozwolone znaki albo zła długość")
     return x
 
 
-def rynek(x, dozwolone) -> str:
+def rynek(x: object, dozwolone: Collection[str]) -> str:
     """Rynek trafia do ścieżki URL (/{rynek}/scan), więc tylko z listy."""
-    if x not in dozwolone:
+    if not isinstance(x, str) or x not in dozwolone:
         raise BladWejscia(f"rynek: nieznany — dozwolone: {', '.join(sorted(dozwolone))}")
     return x
 
 
-def tekst(x, nazwa: str, max_dl: int, pusty: bool = False, jednolinijkowy: bool = True) -> str:
+def tekst(x: object, nazwa: str, max_dl: int, pusty: bool = False, jednolinijkowy: bool = True) -> str:
     if not isinstance(x, str):
         raise BladWejscia(f"{nazwa}: oczekiwano tekstu")
     if not pusty and not x.strip():
@@ -113,11 +117,11 @@ def tekst(x, nazwa: str, max_dl: int, pusty: bool = False, jednolinijkowy: bool 
     return x
 
 
-def kod_pine(x) -> str:
+def kod_pine(x: object) -> str:
     return tekst(x, "kod", MAX_KOD_PINE, jednolinijkowy=False)
 
 
-def nazwa_skryptu(x, nazwa: str = "nazwa", max_dl: int = 100) -> str:
+def nazwa_skryptu(x: object, nazwa: str = "nazwa", max_dl: int = 100) -> str:
     """Nazwa trafia w cudzysłów w kodzie Pine i na konto — bez cudzysłowów i ukośników."""
     t = tekst(x, nazwa, max_dl)
     if any(c in t for c in '"\\'):
@@ -126,7 +130,8 @@ def nazwa_skryptu(x, nazwa: str = "nazwa", max_dl: int = 100) -> str:
 
 
 # ── listy ───────────────────────────────────────────────────────────────
-def lista(x, nazwa: str, jeden, max_el: int = MAX_ELEMENTOW) -> list:
+def lista(x: object, nazwa: str, jeden: Callable[[Any], T],
+          max_el: int = MAX_ELEMENTOW) -> list[T]:
     if not isinstance(x, list):
         raise BladWejscia(f"{nazwa}: oczekiwano listy")
     if len(x) > max_el:
@@ -134,26 +139,26 @@ def lista(x, nazwa: str, jeden, max_el: int = MAX_ELEMENTOW) -> list:
     return [jeden(e) for e in x]
 
 
-def liczby(x, nazwa: str, min_: float, max_: float, max_el: int = 30) -> list:
+def liczby(x: object, nazwa: str, min_: float, max_: float, max_el: int = 30) -> list[float]:
     return lista(x, nazwa, lambda e: liczba(e, nazwa, min_, max_), max_el)
 
 
-def calkowite(x, nazwa: str, min_: int, max_: int, max_el: int = 30) -> list:
+def calkowite(x: object, nazwa: str, min_: int, max_: int, max_el: int = 30) -> list[int]:
     return lista(x, nazwa, lambda e: calkowita(e, nazwa, min_, max_), max_el)
 
 
-def pary_instrument_przedzial(x) -> list[tuple[str, str]]:
+def pary_instrument_przedzial(x: object) -> list[tuple[str, str]]:
     """[["FX:EURUSD","60"], ...] — każda para to przełączenie wykresu."""
-    def jedna(e):
+    def jedna(e: object) -> tuple[str, str]:
         if not isinstance(e, (list, tuple)) or len(e) != 2:
             raise BladWejscia("instrumenty: każda pozycja to [symbol, przedział]")
         return (symbol(e[0], "instrumenty.symbol"), interwal(e[1], "instrumenty.przedzial"))
     return lista(x, "instrumenty", jedna, MAX_INSTRUMENTOW)
 
 
-def warunki(x) -> list[dict]:
+def warunki(x: object) -> list[dict[str, Any]]:
     """Filtr skanera: [{"left": pole, "operation": op, "right": liczba|pole|[liczby]}]."""
-    def jeden(w):
+    def jeden(w: object) -> dict[str, Any]:
         if not isinstance(w, dict) or set(w) - {"left", "operation", "right"}:
             raise BladWejscia("warunki: oczekiwano {left, operation, right}")
         if "left" not in w or "operation" not in w or "right" not in w:
@@ -161,6 +166,7 @@ def warunki(x) -> list[dict]:
         if w["operation"] not in OPERACJE:
             raise BladWejscia(f"warunki: nieznana operacja {str(w['operation'])[:20]!r}")
         p = w["right"]
+        prawa: list[float] | str | float
         if isinstance(p, list):
             prawa = liczby(p, "warunki.right", -1e12, 1e12, 20)
         elif isinstance(p, str):
@@ -192,7 +198,7 @@ def _wewnatrz(p: Path, baza: Path) -> bool:
         return False
 
 
-def sciezka_do_odczytu(x, baza: Path | None = None) -> Path:
+def sciezka_do_odczytu(x: object, baza: Path | None = None) -> Path:
     """Plik z kodem Pine. Treść idzie do TradingView, więc to wyciek, jeśli
     klient może wskazać dowolny plik — dlatego tylko *.pine/*.txt z katalogu
     bazowego, po rozwiązaniu dowiązań, zwykły plik, z limitem rozmiaru."""
@@ -210,7 +216,7 @@ def sciezka_do_odczytu(x, baza: Path | None = None) -> Path:
     return p
 
 
-def sciezka_do_zapisu(x, baza: Path | None = None) -> Path:
+def sciezka_do_zapisu(x: object, baza: Path | None = None) -> Path:
     """Zrzut ekranu. Zapis pod dowolną ścieżką pozwala nadpisać ~/.bashrc czy
     authorized_keys bajtami PNG — dlatego tylko *.png w katalogu bazowym,
     bez dowiązań i bez nadpisywania czegokolwiek, co nie jest zwykłym plikiem."""

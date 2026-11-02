@@ -20,12 +20,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import siec  # noqa: E402
 import walidacja as wal  # noqa: E402
 import wykres  # noqa: E402
+from typy import Json  # noqa: E402
+from wspolne import ORIGIN_TV, REFERER_TV, UA_PRZEGLADARKI, odczekaj  # noqa: E402
 
 ODSTEP_S = 1.2
 _ostatnie = [0.0]
@@ -35,14 +38,11 @@ class BladSesji(Exception):
     """Brak sesji albo TradingView odmówił."""
 
 
-def _odczekaj():
-    minelo = time.time() - _ostatnie[0]
-    if minelo < ODSTEP_S:
-        time.sleep(ODSTEP_S - minelo)
-    _ostatnie[0] = time.time()
+def _odczekaj() -> None:
+    odczekaj(_ostatnie, ODSTEP_S)
 
 
-def ciasteczka() -> list[dict]:
+def ciasteczka() -> list[Json]:
     """Wszystkie ciasteczka TradingView z przeglądarki, łącznie z HttpOnly."""
     import websocket
 
@@ -55,13 +55,14 @@ def ciasteczka() -> list[dict]:
         while time.time() < koniec:
             o = json.loads(ws.recv())
             if o.get("id") == 1:
-                return o.get("result", {}).get("cookies", [])
+                cookies: list[Json] = o.get("result", {}).get("cookies", [])
+                return cookies
     finally:
         ws.close()
     raise BladSesji("przeglądarka nie oddała ciasteczek w 20 s")
 
 
-def czy_zalogowany() -> dict:
+def czy_zalogowany() -> Json:
     """Czy w przeglądarce jest sesja TradingView — i jaki plan.
 
     Sprawdza dwie rzeczy niezależnie: ciasteczko `sessionid` (HttpOnly, przez CDP)
@@ -82,21 +83,20 @@ def czy_zalogowany() -> dict:
     }
 
 
-def _naglowki() -> dict:
+def _naglowki() -> dict[str, str]:
     ck = ciasteczka()
     if not any(c["name"] == "sessionid" for c in ck):
         raise BladSesji("brak sesji TradingView w przeglądarce — zaloguj się")
     return {
         "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in ck),
-        "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
-        "Origin": "https://www.tradingview.com",
-        "Referer": "https://www.tradingview.com/",
+        "User-Agent": UA_PRZEGLADARKI,
+        "Origin": ORIGIN_TV,
+        "Referer": REFERER_TV,
         "Accept": "application/json",
     }
 
 
-def _pobierz(url: str) -> object:
+def _pobierz(url: str) -> Any:
     try:
         siec.sprawdz_adres(url)    # przed _naglowki(): ciasteczka nie opuszczają procesu dla obcego hosta
     except siec.BladSieci as e:
@@ -118,7 +118,7 @@ def _pobierz(url: str) -> object:
         raise BladSesji(f"{type(e).__name__}: {str(e)[:80]}") from e
 
 
-def alerty() -> dict:
+def alerty() -> Json:
     """Wszystkie alerty cenowe z konta.
 
     Zmierzone: 208 alertów. Zwraca listę skróconą do pól, które coś znaczą.
@@ -128,7 +128,7 @@ def alerty() -> dict:
     if not isinstance(surowe, list):
         return {"ile": 0, "surowe": str(d)[:200]}
 
-    def czysty_symbol(s):
+    def czysty_symbol(s: Any) -> Any:
         # TradingView koduje symbol alertu jako JSON z prefiksem "=",
         # np. ={"symbol":"ICMARKETS:USDCHF","session":"regular",...}
         if isinstance(s, str) and s.startswith("={"):
@@ -151,7 +151,7 @@ def alerty() -> dict:
     return {"ile": len(lista), "alerty": lista}
 
 
-def skrypty_pine() -> dict:
+def skrypty_pine() -> Json:
     """Skrypty Pine zapisane na koncie. Zmierzone: 59."""
     d = _pobierz("https://pine-facade.tradingview.com/pine-facade/list/?filter=saved")
     if not isinstance(d, list):
@@ -165,7 +165,7 @@ def skrypty_pine() -> dict:
     return {"ile": len(lista), "skrypty": lista}
 
 
-def zrodlo_pine(id_skryptu: str) -> dict:
+def zrodlo_pine(id_skryptu: str) -> Json:
     """Kod źródłowy zapisanego skryptu po identyfikatorze z `skrypty_pine`."""
     id_skryptu = wal.identyfikator(id_skryptu)
     d = _pobierz("https://pine-facade.tradingview.com/pine-facade/get/"
@@ -176,13 +176,13 @@ def zrodlo_pine(id_skryptu: str) -> dict:
     return {"surowe": str(d)[:300]}
 
 
-def lista_obserwowanych() -> dict:
+def lista_obserwowanych() -> Json:
     """Instrumenty z listy obserwowanych otwartej w panelu wykresu.
 
     Czyta z panelu, nie z HTTP — TradingView nie wystawia tego prosto.
     Zmierzone: 29 symboli z listy „Forex".
     """
-    w = wykres._wykonaj("""(function(){
+    w: Json = wykres._wykonaj("""(function(){
       var panel=document.querySelector('[class*="layout__area--right"]');
       if(!panel) return {blad:'panel prawy nie jest otwarty'};
       var el=panel.querySelectorAll('[data-symbol-full]');
@@ -195,7 +195,7 @@ def lista_obserwowanych() -> dict:
     return w
 
 
-def strategie_wbudowane() -> dict:
+def strategie_wbudowane() -> Json:
     """Wbudowane strategie TradingView. Zmierzone: 20 z 145 wbudowanych skryptów."""
     d = _pobierz("https://pine-facade.tradingview.com/pine-facade/list/?filter=standard")
     if not isinstance(d, list):
@@ -205,7 +205,7 @@ def strategie_wbudowane() -> dict:
     return {"wbudowanych": len(d), "strategii": len(st), "strategie": st}
 
 
-def _pine_api(kod_js: str, czekaj: float = 60):
+def _pine_api(kod_js: str, czekaj: float = 60) -> Any:
     """Wywołuje pineEditorApi strony. Zmierzone sygnatury:
     saveNewScript({source,name}), saveExistingScript({scriptIdPart,source,name}),
     getSource(id,'last'), deleteScript(id), listSavedScripts()."""
@@ -214,11 +214,11 @@ def _pine_api(kod_js: str, czekaj: float = 60):
         "var p=api.pineEditorApi.call(api);" + kod_js + "})()", czekaj=czekaj)
 
 
-def zapisz_pine(kod: str, nazwa: str) -> dict:
+def zapisz_pine(kod: str, nazwa: str) -> Json:
     """Zapisuje nowy skrypt Pine na koncie. Zmierzone: lista rośnie o jeden,
     zwraca success i identyfikator."""
     k, n = json.dumps(wal.kod_pine(kod)), json.dumps(wal.nazwa_skryptu(nazwa))
-    w = _pine_api(f"var r=await p.saveNewScript({{source:{k},name:{n}}});"
+    w: Json = _pine_api(f"var r=await p.saveNewScript({{source:{k},name:{n}}});"
                   "var l=await p.listSavedScripts();"
                   f"var t=l.filter(function(x){{return x.scriptName==={n}}});"
                   "return {zapisany:!!(r&&r.success), id:t.length?t[t.length-1].scriptIdPart:null, "
@@ -228,17 +228,17 @@ def zapisz_pine(kod: str, nazwa: str) -> dict:
     return w
 
 
-def usun_pine(id_skryptu: str) -> dict:
+def usun_pine(id_skryptu: str) -> Json:
     """Usuwa zapisany skrypt po identyfikatorze z `skrypty_pine`."""
     i = json.dumps(wal.identyfikator(id_skryptu))
-    w = _pine_api(f"var r=await p.deleteScript({i}); var l=await p.listSavedScripts();"
+    w: Json = _pine_api(f"var r=await p.deleteScript({i}); var l=await p.listSavedScripts();"
                   "return {usuniety:String(r)==='ok'||r===undefined||!!(r&&r.success), zapisanych_teraz:l.length};")
     if isinstance(w, dict) and "blad" in w:
         raise BladSesji(w["blad"])
     return w
 
 
-def tester_raport() -> dict:
+def tester_raport() -> Json:
     """Otwiera Strategy Tester i czyta raport strategii, która jest na wykresie.
 
     Zmierzone: panel otwiera się przez bottomWidgetBar.open('backtesting'),
@@ -250,7 +250,7 @@ def tester_raport() -> dict:
     """
     wykres._wykonaj("(function(){window.TradingView.bottomWidgetBar.open('backtesting');return 1;})()")
     time.sleep(5)
-    w = wykres._wykonaj("""(function(){
+    w: Json = wykres._wykonaj("""(function(){
       var d=document.querySelector('[class*="layout__area--bottom"]');
       var linie=d?d.innerText.split(String.fromCharCode(10)).map(function(x){return x.trim()}).filter(Boolean):[];
       var st=window.TradingViewApi._activeChartWidgetWV.value().getAllStudies()
