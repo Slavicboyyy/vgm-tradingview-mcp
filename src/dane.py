@@ -165,7 +165,7 @@ def zgodnosc(symbol: str, interwaly: list[str] | None = None,
 
     kupno = [i for i, v in dane.items() if v is not None and v >= prog_kupno]
     sprzedaz = [i for i, v in dane.items() if v is not None and v <= prog_sprzedaz]
-    brak = [i for i, v in dane.items() if v is None]
+    brak = [i for i in interwaly if dane.get(i) is None]
 
     return {
         "symbol": symbol,
