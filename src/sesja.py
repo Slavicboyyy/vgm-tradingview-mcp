@@ -39,6 +39,7 @@ class BladSesji(Exception):
 
 
 def _odczekaj() -> None:
+    """Trzyma odstęp ODSTEP_S między zapytaniami z ciasteczkami sesji."""
     odczekaj(_ostatnie, ODSTEP_S)
 
 
@@ -84,6 +85,7 @@ def czy_zalogowany() -> Json:
 
 
 def _naglowki() -> dict[str, str]:
+    """Nagłówki z ciasteczkami sesji; BladSesji, gdy brak `sessionid`."""
     ck = ciasteczka()
     if not any(c["name"] == "sessionid" for c in ck):
         raise BladSesji("brak sesji TradingView w przeglądarce — zaloguj się")
@@ -97,6 +99,7 @@ def _naglowki() -> dict[str, str]:
 
 
 def _pobierz(url: str) -> Any:
+    """GET na host TradingView z ciasteczkami sesji; każdy błąd jako BladSesji."""
     try:
         siec.sprawdz_adres(url)    # przed _naglowki(): ciasteczka nie opuszczają procesu dla obcego hosta
     except siec.BladSieci as e:

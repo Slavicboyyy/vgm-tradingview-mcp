@@ -44,6 +44,7 @@ class BladPine(Exception):
 
 
 def _odczekaj() -> None:
+    """Trzyma odstęp ODSTEP_S między zapytaniami do kompilatora."""
     odczekaj(_ostatnie, ODSTEP_S)
 
 
@@ -155,6 +156,7 @@ def szkielet(nazwa: str = "Nowy wskaźnik", na_wykresie: bool = True) -> str:
 
 
 def _demo() -> None:
+    """Sprawdzenie na żywym kompilatorze — uruchom ten plik wprost."""
     print("1. kod poprawny")
     w = sprawdz('//@version=5\nindicator("test")\nplot(ta.sma(close, 20))')
     print(f"   poprawny: {w['poprawny']}, błędów: {len(w['bledy'])}")

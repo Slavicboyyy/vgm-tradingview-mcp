@@ -60,6 +60,7 @@ def _ostatnia_swieca() -> Swieca | None:
 
 
 def _r(kod: str, czekaj: float = 30) -> Any:
+    """Kod odtwarzania na stronie; wynik z `blad` rzuca BladReplay."""
     return wykres.uruchom(_PROLOG, kod, czekaj, BladReplay)
 
 

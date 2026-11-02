@@ -53,6 +53,7 @@ class BladTV(Exception):
 
 
 def _odczekaj() -> None:
+    """Trzyma odstęp ODSTEP_S między zapytaniami do skanera."""
     odczekaj(_ostatnie, ODSTEP_S)
 
 

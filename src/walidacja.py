@@ -45,6 +45,7 @@ OPERACJE = {"less", "greater", "equal", "nequal", "eless", "egreater",
 
 
 def _bez_sterujacych(t: str) -> bool:
+    """Czy tekst nie ma znaków sterujących (kody 0–31 i 127)."""
     return not any(ord(c) < 32 or ord(c) == 127 for c in t)
 
 
@@ -73,6 +74,7 @@ def calkowita(x: object, nazwa: str, min_: int, max_: int) -> int:
 
 # ── teksty ──────────────────────────────────────────────────────────────
 def symbol(x: object, nazwa: str = "symbol") -> str:
+    """Nazwa instrumentu, np. FX:EURUSD: litery, cyfry i `_.!-`, opcjonalnie z giełdą."""
     if not isinstance(x, str) or not _SYMBOL.match(x):
         raise BladWejscia(f"{nazwa}: niedozwolone znaki albo zła długość "
                           "(oczekiwano np. FX:EURUSD)")
@@ -80,6 +82,7 @@ def symbol(x: object, nazwa: str = "symbol") -> str:
 
 
 def interwal(x: object, nazwa: str = "interwal") -> str:
+    """Przedział czasu, np. 5, 60, 240, 1W, D; liczbę całkowitą zamienia na tekst."""
     if isinstance(x, int) and not isinstance(x, bool):
         x = str(x)
     if not isinstance(x, str) or not _INTERWAL.match(x):
@@ -88,12 +91,14 @@ def interwal(x: object, nazwa: str = "interwal") -> str:
 
 
 def pole(x: object, nazwa: str = "pole") -> str:
+    """Nazwa pola TradingView, opcjonalnie z sufiksem `|interwał`."""
     if not isinstance(x, str) or not _POLE.match(x):
         raise BladWejscia(f"{nazwa}: niedozwolone znaki albo zła długość")
     return x
 
 
 def identyfikator(x: object, nazwa: str = "id") -> str:
+    """Identyfikator wskaźnika albo skryptu: do 100 znaków `A-Za-z0-9_;.-`."""
     if not isinstance(x, str) or not _ID.match(x):
         raise BladWejscia(f"{nazwa}: niedozwolone znaki albo zła długość")
     return x
@@ -107,6 +112,7 @@ def rynek(x: object, dozwolone: Collection[str]) -> str:
 
 
 def tekst(x: object, nazwa: str, max_dl: int, pusty: bool = False, jednolinijkowy: bool = True) -> str:
+    """Tekst o ograniczonej długości; domyślnie niepusty i bez znaków sterujących."""
     if not isinstance(x, str):
         raise BladWejscia(f"{nazwa}: oczekiwano tekstu")
     if not pusty and not x.strip():
@@ -119,6 +125,7 @@ def tekst(x: object, nazwa: str, max_dl: int, pusty: bool = False, jednolinijkow
 
 
 def kod_pine(x: object) -> str:
+    """Kod Pine: niepusty tekst do MAX_KOD_PINE znaków, wiele linii dozwolone."""
     return tekst(x, "kod", MAX_KOD_PINE, jednolinijkowy=False)
 
 
@@ -133,6 +140,7 @@ def nazwa_skryptu(x: object, nazwa: str = "nazwa", max_dl: int = 100) -> str:
 # ── listy ───────────────────────────────────────────────────────────────
 def lista(x: object, nazwa: str, jeden: Callable[[Any], T],
           max_el: int = MAX_ELEMENTOW) -> list[T]:
+    """Lista do `max_el` elementów, każdy sprawdzony funkcją `jeden`."""
     if not isinstance(x, list):
         raise BladWejscia(f"{nazwa}: oczekiwano listy")
     if len(x) > max_el:
@@ -141,10 +149,12 @@ def lista(x: object, nazwa: str, jeden: Callable[[Any], T],
 
 
 def liczby(x: object, nazwa: str, min_: float, max_: float, max_el: int = 30) -> list[float]:
+    """Lista skończonych liczb z przedziału [min_, max_]."""
     return lista(x, nazwa, lambda e: liczba(e, nazwa, min_, max_), max_el)
 
 
 def calkowite(x: object, nazwa: str, min_: int, max_: int, max_el: int = 30) -> list[int]:
+    """Lista liczb całkowitych z przedziału [min_, max_]."""
     return lista(x, nazwa, lambda e: calkowita(e, nazwa, min_, max_), max_el)
 
 
@@ -205,6 +215,7 @@ def katalog_zapisu() -> Path:
 
 
 def _wewnatrz(p: Path, baza: Path) -> bool:
+    """Czy ścieżka `p` leży wewnątrz katalogu `baza`."""
     try:
         p.relative_to(baza)
         return True
@@ -256,6 +267,7 @@ def sciezka_do_zapisu(x: object, baza: Path | None = None) -> Path:
 
 
 def wynik_nie_za_duzy(tekst_json: str) -> str:
+    """Przepuszcza odpowiedź do MAX_WYNIK_ZNAKOW znaków; większa to BladWejscia."""
     if len(tekst_json) > MAX_WYNIK_ZNAKOW:
         raise BladWejscia(f"wynik za duży ({len(tekst_json)} znaków) — zmniejsz `ile`")
     return tekst_json
