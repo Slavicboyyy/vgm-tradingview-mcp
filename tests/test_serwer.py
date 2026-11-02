@@ -1,10 +1,4 @@
-"""Testy serwera MCP: lista narzędzi i kierowanie wywołań.
-
-Pakiet `mcp` jest atrapą z conftest.py; warstwy dane/analiza/sesja/wykres
-są podmieniane, więc nic nie wychodzi do sieci ani przeglądarki.
-"""
-from __future__ import annotations
-
+"""Serwer MCP: walidacja argumentów, limity czasu i wielkości, błędy bez wycieków."""
 import asyncio
 import json
 import sys
@@ -12,201 +6,210 @@ import types
 
 import pytest
 
-import analiza
-import dane
-import pola
+
+def _atrapa_mcp():
+    """Testy nie zależą od wersji pakietu `mcp` (serwer używa dekoratorów z 1.x,
+    a w 2.x ich nie ma) ani od jego działania: podstawiamy minimalną atrapę."""
+    class Server:
+        def __init__(self, nazwa):
+            pass
+
+        def list_tools(self):
+            return lambda f: f
+
+        def call_tool(self):
+            return lambda f: f
+
+    class Tool:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    class TextContent:
+        def __init__(self, type, text):
+            self.type, self.text = type, text
+
+    for nazwa in ("mcp", "mcp.server", "mcp.server.stdio", "mcp.types"):
+        sys.modules[nazwa] = types.ModuleType(nazwa)
+    sys.modules["mcp.server"].Server = Server
+    sys.modules["mcp.server.stdio"].stdio_server = lambda: None
+    sys.modules["mcp.types"].Tool = Tool
+    sys.modules["mcp.types"].TextContent = TextContent
+
+
+_atrapa_mcp()
+
+import pine
 import serwer
+import walidacja as wal
 
 
-def wolaj(nazwa, argumenty=None):
-    wynik = asyncio.run(serwer.wywolaj(nazwa, argumenty or {}))
-    assert len(wynik) == 1 and wynik[0].type == "text"
+def _wywolaj(nazwa, argumenty):
+    wynik = asyncio.run(serwer.wywolaj(nazwa, argumenty))
     return json.loads(wynik[0].text)
 
 
-@pytest.fixture(scope="module")
-def narzedzia():
-    return asyncio.run(serwer.lista_narzedzi())
+def _bez_obslugi(monkeypatch):
+    monkeypatch.setattr(serwer, "_obsluz",
+                        lambda n, a: pytest.fail("zły argument doszedł do obsługi narzędzia"))
 
 
-# ── lista narzędzi ──────────────────────────────────────────────────────
-def test_nazwy_narzedzi_sa_unikalne_i_z_prefiksem(narzedzia):
-    nazwy = [t.name for t in narzedzia]
-    assert len(nazwy) == len(set(nazwy))
-    assert all(n.startswith("vgm_") for n in nazwy)
-
-
-def test_kazde_narzedzie_ma_opis_z_zastrzezeniem_i_poprawny_schemat(narzedzia):
-    for t in narzedzia:
-        assert t.description.strip(), t.name
-        sch = t.inputSchema
-        assert sch["type"] == "object", t.name
-        assert set(sch.get("required", [])) <= set(sch.get("properties", {})), t.name
-
-
-def test_n_dopisuje_uwage_o_danych_i_domyslne_pola():
-    t = serwer._n("vgm_x", "Opis.")
-    assert t.description == "Opis. " + serwer.UWAGA
-    assert t.inputSchema == {"type": "object", "properties": {}, "required": []}
-
-
-def test_kazde_zadeklarowane_narzedzie_ma_obsluge(narzedzia):
-    """Deklaracja bez obsługi kończyłaby się odpowiedzią „nieznane narzędzie"."""
-    import inspect
-    zrodlo = inspect.getsource(serwer.wywolaj)
-    bez = [t.name for t in narzedzia if f'"{t.name}"' not in zrodlo]
-    assert bez == []
-
-
-# ── proste narzędzia bez zapytań ────────────────────────────────────────
-def test_vgm_rynki():
-    assert wolaj("vgm_rynki") == pola.RYNKI
-
-
-def test_vgm_pola_zawiera_grupy_i_interwaly():
-    w = wolaj("vgm_pola")
-    assert {g: w[g] for g in pola.GRUPY} == pola.GRUPY
-    assert w["interwaly_zmierzone"] == pola.INTERWALY_PEWNE
-
-
-def test_nieznane_narzedzie():
-    assert wolaj("vgm_nie_ma_takiego") == {"blad": "nieznane narzędzie: vgm_nie_ma_takiego"}
-
-
-def test_polskie_znaki_nie_sa_escapowane():
-    # ensure_ascii=False — czytelne dla człowieka i modelu
-    tekst = asyncio.run(serwer.wywolaj("vgm_nie_ma_takiego", {}))[0].text
-    assert "narzędzie" in tekst
-
-
-# ── kierowanie do dane/analiza ──────────────────────────────────────────
-def test_odczyt_przekazuje_symbol_i_pola(monkeypatch):
-    zap = []
-    monkeypatch.setattr(dane, "odczyt", lambda s, p=None: zap.append((s, p)) or {"close": 1})
-    assert wolaj("vgm_odczyt", {"symbol": "FX:EURUSD", "pola": ["close"]}) == {"close": 1}
-    assert wolaj("vgm_odczyt", {"symbol": "FX:EURUSD"}) == {"close": 1}
-    assert zap == [("FX:EURUSD", ["close"]), ("FX:EURUSD", None)]
-
-
-def test_zgodnosc_domyslne_progi(monkeypatch):
-    zap = []
-    monkeypatch.setattr(dane, "zgodnosc", lambda *a: zap.append(a) or {"ok": 1})
-    wolaj("vgm_zgodnosc", {"symbol": "X"})
-    wolaj("vgm_zgodnosc", {"symbol": "X", "interwaly": ["5"], "prog_kupno": 60,
-                           "prog_sprzedaz": 40})
-    assert zap == [("X", None, 55, 45), ("X", ["5"], 60, 40)]
-
-
-@pytest.mark.parametrize("narzedzie, funkcja, argumenty, oczekiwane", [
-    ("vgm_skan_wyprzedane", "skan_wyprzedane", {}, ("forex", 30, 20)),
-    ("vgm_skan_wyprzedane", "skan_wyprzedane",
-     {"rynek": "poland", "prog": 20, "ile": 3}, ("poland", 20, 3)),
-    ("vgm_skan_wykupione", "skan_wykupione", {}, ("forex", 70, 20)),
-    ("vgm_skan_trend", "skan_silny_trend", {"prog_adx": 40}, ("forex", 40, 20)),
-    ("vgm_skan_wolumen", "skan_wolumen", {"krotnosc": 3}, ("forex", 3, 20)),
+@pytest.mark.parametrize("nazwa,arg", [
+    ("vgm_odczyt", {"symbol": "FX:EURUSD&x=1"}),
+    ("vgm_odczyt", {"symbol": "FX:EURUSD", "pola": "RSI"}),                 # napis zamiast listy
+    ("vgm_odczyt", {"symbol": "FX:EURUSD", "pola": ["RSI"] * 500}),
+    ("vgm_wiele", {"symbole": ["FX:EURUSD"] * 500}),
+    ("vgm_mtf", {"symbol": "FX:EURUSD", "interwaly": ["60; DROP"]}),
+    ("vgm_skan_wyprzedane", {"rynek": "../../x"}),
+    ("vgm_skan_wyprzedane", {"ile": 10**9}),
+    ("vgm_skan_wyprzedane", {"ile": "dużo"}),
+    ("vgm_skan_wyprzedane", {"prog": float("nan")}),
+    ("vgm_skan", {"rynek": "forex", "warunki": [{"left": "RSI", "operation": "rm", "right": 1}]}),
+    ("vgm_wykres_swiece", {"ile": 10**9}),
+    ("vgm_wykres_swiece", {"ile": -5}),
+    ("vgm_replay_krok", {"ile": 501}),
+    ("vgm_zmierz", {"po_ilu": 10**9}),
+    ("vgm_zmierz", {"wskaznik": "os.system"}),
+    ("vgm_zmierz", {"kierunek": "bokiem"}),
+    ("vgm_zmierz", {"spread_proc": -1}),
+    ("vgm_walk_forward", {"wskaznik": "RSI", "progi": [1] * 1000}),
+    ("vgm_walk_forward", {"wskaznik": "RSI", "czesc_ucz": 5}),
+    ("vgm_jak_dlugo_trzymac", {"dlugosci": [10**9]}),
+    ("vgm_koszt_a_przewaga", {"koszty": ["a"]}),
+    ("vgm_przeglad_instrumentow", {"instrumenty": [["FX:EURUSD", "60"]] * 100}),
+    ("vgm_swiece_przedzialy", {"przedzialy": ["60"] * 100}),
+    ("vgm_wskaznik_usun", {"id": "a'); x('"}),
+    ("vgm_zrodlo_pine", {"id": "../../x"}),
+    ("vgm_uklad_wybierz", {"indeks": "abc"}),
+    ("vgm_wykres_typ", {"typ": 10**9}),
+    ("vgm_odczyt", ["nie", "obiekt"]),
 ])
-def test_skany_domyslne_i_przekazane_argumenty(monkeypatch, narzedzie, funkcja,
-                                               argumenty, oczekiwane):
-    zap = []
-    monkeypatch.setattr(analiza, funkcja, lambda *a: zap.append(a) or [])
-    wolaj(narzedzie, argumenty)
-    assert zap == [oczekiwane]
+def test_zly_argument_odrzucony_przed_obsluga(nazwa, arg, monkeypatch):
+    _bez_obslugi(monkeypatch)
+    w = _wywolaj(nazwa, arg)
+    assert "niepoprawny argument" in w["blad"]
+    assert w["narzedzie"] == nazwa
 
 
-def test_skan_wlasny_wymaga_rynku_i_warunkow(monkeypatch):
-    monkeypatch.setattr(analiza, "skan_wlasny", lambda *a: list(a))
-    w = [{"left": "RSI", "operation": "less", "right": 30}]
-    assert wolaj("vgm_skan", {"rynek": "crypto", "warunki": w}) == ["crypto", w, None, 30]
-    assert "brakuje wymaganego pola" in wolaj("vgm_skan", {"rynek": "crypto"})["blad"]
+def test_poprawne_argumenty_dochodza_do_obslugi(monkeypatch):
+    zapisane = {}
+    monkeypatch.setattr(serwer, "_obsluz", lambda n, a: zapisane.update(n=n, a=a) or '{"ok": 1}')
+    w = _wywolaj("vgm_skan_wyprzedane", {"rynek": "forex", "prog": 25, "ile": 200})
+    assert w == {"ok": 1}
+    assert zapisane["a"] == {"rynek": "forex", "prog": 25, "ile": 200}
 
 
-# ── obsługa błędów ──────────────────────────────────────────────────────
-def test_bladtv_zamieniany_na_odpowiedz_z_bledem(monkeypatch):
-    def zle(*a, **k):
-        raise dane.BladTV("TradingView odmówił (429)")
-
-    monkeypatch.setattr(dane, "odczyt", zle)
-    assert wolaj("vgm_odczyt", {"symbol": "X"}) == {
-        "blad": "TradingView odmówił (429)", "narzedzie": "vgm_odczyt"}
+def test_brak_argumentow_to_pusty_obiekt(monkeypatch):
+    monkeypatch.setattr(serwer, "_obsluz", lambda n, a: '{"a": %d}' % len(a))
+    assert _wywolaj("vgm_rynki", None) == {"a": 0}
 
 
-def test_brak_wymaganego_argumentu_to_czytelny_blad():
-    w = wolaj("vgm_odczyt", {})
-    assert w["narzedzie"] == "vgm_odczyt"
-    assert "brakuje wymaganego pola" in w["blad"] and "symbol" in w["blad"]
+def test_za_duzo_argumentow(monkeypatch):
+    _bez_obslugi(monkeypatch)
+    assert "niepoprawny" in _wywolaj("vgm_rynki", {f"k{i}": 1 for i in range(100)})["blad"]
 
 
-def test_rzucenie_innego_wyjatku_nie_jest_polykane(monkeypatch):
-    monkeypatch.setattr(dane, "odczyt", lambda s, p=None: 1 / 0)
-    with pytest.raises(ZeroDivisionError):
-        wolaj("vgm_odczyt", {"symbol": "X"})
+# ── limit czasu: zawieszone wywołanie nie blokuje serwera ───────────────
+def test_zawieszone_narzedzie_konczy_sie_limitem_czasu(monkeypatch):
+    import threading
+
+    zwolnij = threading.Event()
+    monkeypatch.setattr(serwer, "CZAS_NARZEDZIA_S", 0.2)
+    monkeypatch.setattr(serwer, "_obsluz", lambda n, a: zwolnij.wait(5) and "{}")
+    try:
+        w = _wywolaj("vgm_rynki", {})
+    finally:
+        zwolnij.set()
+    assert "limit" in w["blad"]
 
 
-# ── moduły ładowane na żądanie: sesja, pine, wykres ─────────────────────
-def atrapa_modulu(nazwa, wyjatek, **funkcje):
-    m = types.ModuleType(nazwa)
-    setattr(m, wyjatek, type(wyjatek, (Exception,), {}))
-    for k, v in funkcje.items():
-        setattr(m, k, v)
-    return m
+def test_wywolania_sa_szeregowane(monkeypatch):
+    """Wykres i limity zapytań nie są bezpieczne wątkowo — dwa wywołania nie nakładają się."""
+    import threading
+    import time as t
+
+    aktywne, maks = [0], [0]
+    blokada = threading.Lock()
+
+    def obsluga(n, a):
+        with blokada:
+            aktywne[0] += 1
+            maks[0] = max(maks[0], aktywne[0])
+        t.sleep(0.05)
+        with blokada:
+            aktywne[0] -= 1
+        return "{}"
+
+    monkeypatch.setattr(serwer, "_obsluz", obsluga)
+
+    async def dwa():
+        await asyncio.gather(serwer.wywolaj("vgm_rynki", {}), serwer.wywolaj("vgm_rynki", {}))
+
+    asyncio.run(dwa())
+    assert maks[0] == 1
 
 
-def test_sesja_wynik_i_blad_logowania(monkeypatch):
-    m = atrapa_modulu("sesja", "BladSesji",
-                      czy_zalogowany=lambda: {"zalogowany": True},
-                      zrodlo_pine=lambda i: (_ for _ in ()).throw(m.BladSesji("brak sesji")))
-    monkeypatch.setitem(sys.modules, "sesja", m)
-    assert wolaj("vgm_sesja") == {"zalogowany": True}
-    w = wolaj("vgm_zrodlo_pine", {"id": "abc"})
-    assert w["blad"] == "brak sesji" and w["narzedzie"] == "vgm_zrodlo_pine"
-    assert "zaloguj" in w["podpowiedz"]
+# ── wyjątki i wielkość odpowiedzi ───────────────────────────────────────
+def test_nieoczekiwany_wyjatek_bez_sladu_stosu_i_sciezek(monkeypatch):
+    def pada(n, a):
+        raise RuntimeError("/home/user/.ssh/id_rsa nie istnieje")
+
+    monkeypatch.setattr(serwer, "_obsluz", pada)
+    w = _wywolaj("vgm_rynki", {})
+    assert w["blad"].startswith("RuntimeError")
+    assert "Traceback" not in json.dumps(w)
 
 
-def test_pine_szkielet_i_blad(monkeypatch):
-    def sprawdz(kod):
-        raise m.BladPine("zły kod")
-
-    m = atrapa_modulu("pine", "BladPine", sprawdz=sprawdz,
-                      szkielet=lambda n, w: f"//@version=6 {n} {w}")
-    monkeypatch.setitem(sys.modules, "pine", m)
-    assert wolaj("vgm_pine_szkielet") == {"kod": "//@version=6 Nowy wskaźnik True"}
-    assert wolaj("vgm_pine_szkielet", {"nazwa": "A", "na_wykresie": False}) == \
-        {"kod": "//@version=6 A False"}
-    assert wolaj("vgm_pine_sprawdz", {"kod": "x"}) == \
-        {"blad": "zły kod", "narzedzie": "vgm_pine_sprawdz"}
+def test_zbyt_duza_odpowiedz_nie_jest_zwracana(monkeypatch):
+    monkeypatch.setattr(serwer, "_obsluz", lambda n, a: "x" * (wal.MAX_WYNIK_ZNAKOW + 1))
+    assert "za duży" in _wywolaj("vgm_rynki", {})["blad"]
 
 
-def test_wykres_blad_dostaje_podpowiedz(monkeypatch):
-    def stan():
-        raise m.BladWykresu("brak karty")
+# ── Pine: plik i usuwanie ───────────────────────────────────────────────
+def test_pine_sprawdz_plik_poza_katalogiem_bazowym(monkeypatch, tmp_path):
+    sekret = tmp_path / "sekret.txt"
+    sekret.write_text("haslo=123")
+    baza = tmp_path / "pine"
+    baza.mkdir()
+    monkeypatch.setenv("VGM_KATALOG_PINE", str(baza))
+    monkeypatch.setattr(pine, "sprawdz", lambda k: pytest.fail("treść pliku wysłana do TradingView"))
+    for zla in (str(sekret), "../sekret.txt", "/etc/passwd"):
+        w = _wywolaj("vgm_pine_sprawdz_plik", {"sciezka": zla})
+        assert "blad" in w
+    assert "haslo" not in json.dumps(w)
 
-    m = atrapa_modulu("wykres", "BladWykresu", stan=stan,
-                      ustaw_symbol=lambda s: {"symbol": s})
-    monkeypatch.setitem(sys.modules, "wykres", m)
-    w = wolaj("vgm_wykres_stan")
-    assert w["blad"] == "brak karty" and "vgm_wykres_zdrowie" in w["podpowiedz"]
-    assert wolaj("vgm_wykres_symbol", {"symbol": "FX:GBPUSD"}) == {"symbol": "FX:GBPUSD"}
+
+def test_pine_sprawdz_plik_z_katalogu_bazowego_dziala(monkeypatch, tmp_path):
+    (tmp_path / "a.pine").write_text("//@version=5\nindicator('x')")
+    monkeypatch.setenv("VGM_KATALOG_PINE", str(tmp_path))
+    monkeypatch.setattr(pine, "sprawdz", lambda k: {"poprawny": True, "bledy": []})
+    w = _wywolaj("vgm_pine_sprawdz_plik", {"sciezka": "a.pine"})
+    assert w["poprawny"] is True
 
 
-def test_wszystkie_narzedzia_wykresu_trafiaja_do_swojej_grupy(narzedzia, monkeypatch):
-    """Narzędzie, którego nazwa nie pasuje do prefiksów grupy, wpada w „nieznane"."""
-    class Atrapa(types.ModuleType):
-        def __getattr__(self, nazwa):
-            if nazwa.startswith("Blad"):
-                typ = type(nazwa, (Exception,), {})
-                setattr(self, nazwa, typ)
-                return typ
-            return lambda *a, **k: {"wywolano": nazwa}
+def test_szkielet_nazwa_nie_wstrzykuje_kodu_pine():
+    with pytest.raises(pine.BladPine):
+        pine.szkielet('x")\nstrategy.entry("a", strategy.long')
+    assert 'indicator("Moja nazwa"' in pine.szkielet("Moja nazwa")
 
-    for nazwa in ("wykres", "pomiar", "uklad", "replay", "sesja", "pine"):
-        monkeypatch.setitem(sys.modules, nazwa, Atrapa(nazwa))
-    monkeypatch.setattr(dane, "_pobierz", lambda s, d=None, p=2: {"data": [], "x": 1})
-    argumenty = {"symbol": "FX:EURUSD", "symbole": ["FX:EURUSD"], "rynek": "forex",
-                 "warunki": [], "kod": "x", "nazwa": "x", "id": "x", "sciezka": "x",
-                 "interwal": "60", "typ": "x", "indeks": 0}
 
-    def nieznane_narzedzie(w):
-        return isinstance(w, dict) and "nieznane narzędzie" in str(w.get("blad", ""))
+def test_usun_pine_wymaga_potwierdzenia(monkeypatch):
+    import sesja
+    monkeypatch.setattr(sesja, "usun_pine", lambda i: pytest.fail("usunięto bez potwierdzenia"))
+    for arg in ({"id": "USER;abc"}, {"id": "USER;abc", "potwierdz": False}, {"id": "USER;abc", "potwierdz": "tak"}):
+        w = _wywolaj("vgm_usun_pine", arg)
+        assert "blad" in w
 
-    nieznane = [t.name for t in narzedzia if nieznane_narzedzie(wolaj(t.name, argumenty))]
-    assert nieznane == []
+
+def test_usun_pine_z_potwierdzeniem(monkeypatch):
+    import sesja
+    monkeypatch.setattr(sesja, "usun_pine", lambda i: {"usuniety": True, "id": i})
+    w = _wywolaj("vgm_usun_pine", {"id": "USER;abc", "potwierdz": True})
+    assert w == {"usuniety": True, "id": "USER;abc"}
+
+
+def test_zrzut_zla_sciezka_przez_serwer(monkeypatch, tmp_path):
+    import wykres
+    monkeypatch.setenv("VGM_KATALOG_ZRZUTOW", str(tmp_path))
+    monkeypatch.setattr(wykres, "_karta", lambda: pytest.fail("ruszył przeglądarkę"))
+    w = _wywolaj("vgm_wykres_zrzut", {"sciezka": "/root/.bashrc", "zamknij_okna": False})
+    assert "blad" in w

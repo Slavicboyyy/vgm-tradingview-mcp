@@ -22,6 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import walidacja as wal  # noqa: E402
 import wykres  # noqa: E402
 
 # Kody układów TradingView. Pierwsza litera to liczba wykresów, reszta opisuje
@@ -111,7 +112,10 @@ def wybierz(indeks: int = 0) -> dict:
     Wszystkie narzędzia wykresu działają na aktywnym, więc to jest przełącznik
     dla `vgm_wykres_symbol`, `vgm_wskaznik_dodaj` i pozostałych.
     """
-    i = int(indeks)
+    try:
+        i = wal.calkowita(indeks, "indeks", 0, 8)
+    except wal.BladWejscia as e:
+        raise BladUkladu(str(e)) from e
     s = stan()
     ile = s.get("wykresow") or 1
     if not 0 <= i < ile:
@@ -128,6 +132,12 @@ def symbol_w_wykresie(indeks: int, symbol: str, interwal: str | None = None) -> 
     Robi to przez chwilowe przełączenie aktywnego wykresu, więc po wywołaniu
     aktywny zostaje ten, który zmieniliśmy.
     """
+    try:    # zanim wybierz() przestawi aktywny wykres użytkownika
+        wal.symbol(symbol)
+        if interwal:
+            wal.interwal(interwal)
+    except wal.BladWejscia as e:
+        raise BladUkladu(str(e)) from e
     wybierz(indeks)
     if interwal:
         wykres.przelacz(symbol, interwal)

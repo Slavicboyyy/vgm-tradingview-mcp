@@ -22,8 +22,8 @@ class Odpowiedz:
     def __exit__(self, *a):
         return False
 
-    def read(self):
-        return self._b
+    def read(self, n=-1):
+        return self._b if n < 0 else self._b[:n]
 
 
 def blad_http(kod):
@@ -32,7 +32,8 @@ def blad_http(kod):
 
 @pytest.fixture
 def urlopen(monkeypatch):
-    """Podmienia urlopen kolejką odpowiedzi; zapisuje wysłane zapytania."""
+    """Podmienia otwieracz z `siec` (jedyne wyjście HTTP) kolejką odpowiedzi;
+    zapisuje wysłane zapytania."""
     def ustaw(*kolejka):
         kolejka = list(kolejka)
         wyslane = []
@@ -44,7 +45,7 @@ def urlopen(monkeypatch):
                 raise x
             return Odpowiedz(x)
 
-        monkeypatch.setattr(dane.urllib.request, "urlopen", falszywy)
+        monkeypatch.setattr(dane.siec._OPENER, "open", falszywy)
         return wyslane
 
     return ustaw

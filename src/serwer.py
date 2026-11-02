@@ -12,8 +12,10 @@ Trzy warstwy o różnych wymaganiach:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -21,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import analiza  # noqa: E402
 import dane  # noqa: E402
 import pola  # noqa: E402
+import walidacja as wal  # noqa: E402
 
 from mcp.server import Server  # noqa: E402
 from mcp.server.stdio import stdio_server  # noqa: E402
@@ -427,8 +430,11 @@ async def lista_narzedzi() -> list[Tool]:
              inputSchema={"type": "object", "properties": {"kod": S, "nazwa": S},
                           "required": ["kod", "nazwa"]}),
         Tool(name="vgm_usun_pine",
-             description="Usuwa zapisany skrypt po identyfikatorze. Nieodwracalne.",
-             inputSchema={"type": "object", "properties": {"id": S}, "required": ["id"]}),
+             description=("Usuwa zapisany skrypt po identyfikatorze. Nieodwracalne — "
+                          "wymaga potwierdz=true."),
+             inputSchema={"type": "object",
+                          "properties": {"id": S, "potwierdz": {"type": "boolean"}},
+                          "required": ["id", "potwierdz"]}),
         Tool(name="vgm_strategie_wbudowane",
              description="Wbudowane strategie TradingView z identyfikatorami. Zmierzone: 20 ze 145.",
              inputSchema={"type": "object", "properties": {}}),
@@ -533,10 +539,116 @@ async def lista_narzedzi() -> list[Tool]:
     ]
 
 
+def _bool(x):
+    if not isinstance(x, bool):
+        raise wal.BladWejscia("oczekiwano true/false")
+    return x
+
+
+def _jeden_z(*dozwolone):
+    def f(x):
+        if x not in dozwolone:
+            raise wal.BladWejscia(f"dozwolone: {', '.join(dozwolone)}")
+        return x
+    return f
+
+
+_LICZBA = lambda x: wal.liczba(x, "liczba", -1e9, 1e9)  # noqa: E731
+_LISTA_POL = lambda x: wal.lista(x, "pola", wal.pole)  # noqa: E731
+
+# Walidatory argumentów wspólne dla wszystkich narzędzi. Klucz spoza tabeli
+# nie jest nigdzie używany, więc go pomijamy; klucz z tabeli MUSI przejść.
+WALIDATORY = {
+    "symbol": wal.symbol,
+    "symbole": lambda x: wal.lista(x, "symbole", wal.symbol),
+    "pola": _LISTA_POL,
+    "wskazniki": _LISTA_POL,
+    "interwal": wal.interwal,
+    "interwaly": lambda x: wal.lista(x, "interwaly", wal.interwal),
+    "przedzialy": lambda x: wal.lista(x, "przedzialy", wal.interwal, 8),
+    "instrumenty": wal.pary_instrument_przedzial,
+    "rynek": lambda x: wal.rynek(x, pola.RYNKI),
+    "warunki": wal.warunki,
+    "prog": _LICZBA, "prog_kupno": _LICZBA, "prog_sprzedaz": _LICZBA,
+    "prog_adx": _LICZBA,
+    "krotnosc": lambda x: wal.liczba(x, "krotnosc", 0, 1e6),
+    "spread_proc": lambda x: wal.liczba(x, "spread_proc", 0, 100),
+    "czesc_ucz": lambda x: wal.liczba(x, "czesc_ucz", 0.5, 0.9),
+    "po_ilu": lambda x: wal.calkowita(x, "po_ilu", 1, 500),
+    "ile_swiec": lambda x: wal.calkowita(x, "ile_swiec", 0, 5000),
+    "okno": lambda x: wal.calkowita(x, "okno", 2, 500),
+    "indeks": lambda x: wal.calkowita(x, "indeks", 0, 8),
+    "typ": lambda x: wal.calkowita(x, "typ", 0, 30),
+    "progi": lambda x: wal.liczby(x, "progi", -1e9, 1e9, 20),
+    "koszty": lambda x: wal.liczby(x, "koszty", 0, 100, 20),
+    "dlugosci": lambda x: wal.calkowite(x, "dlugosci", 1, 500, 20),
+    "kierunek": _jeden_z("ponizej", "powyzej"),
+    "wskaznik": _jeden_z("RSI", "Bollinger", "ADX", "ATR_proc"),
+    "id": wal.identyfikator,
+    "wlacz": _bool, "zamknij_okna": _bool, "na_wykresie": _bool, "potwierdz": _bool,
+}
+# `ile` znaczy co innego w skanach (wiersze), krokach odtwarzania i świecach
+ILE_MAX = {"vgm_skan": 200, "vgm_replay_krok": 500}
+CZAS_NARZEDZIA_S = 240   # twardy limit jednego wywołania, widziany przez klienta
+
+
+def zwaliduj(nazwa: str, a) -> dict:
+    """Sprawdza argumenty wywołania. Rzuca BladWejscia z nazwą złego pola."""
+    if a is None:
+        a = {}
+    if not isinstance(a, dict):
+        raise wal.BladWejscia("argumenty muszą być obiektem")
+    if len(a) > 20:
+        raise wal.BladWejscia("za dużo argumentów")
+    czyste = {}
+    for k, v in a.items():
+        try:
+            if k == "ile":
+                maks = ILE_MAX.get(nazwa, 200 if nazwa.startswith("vgm_skan") else 5000)
+                czyste[k] = wal.calkowita(v, "ile", 1, maks)
+            elif k in WALIDATORY:
+                czyste[k] = WALIDATORY[k](v)
+            else:
+                czyste[k] = v
+        except wal.BladWejscia as e:
+            raise wal.BladWejscia(f"{k}: {e}" if k not in str(e) else str(e)) from e
+    return czyste
+
+
+_ZAMEK = threading.Lock()   # wykres, sesja i limity zapytań nie są bezpieczne wątkowo
+
+
 @serwer.call_tool()
 async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
+    """Waliduje wejście, a blokujące wywołanie sieciowe/CDP wykonuje w wątku
+    z limitem czasu — inaczej jedno zawieszone zapytanie zatrzymuje cały serwer."""
     def ok(x):
         return [TextContent(type="text", text=json.dumps(x, ensure_ascii=False, indent=1))]
+
+    try:
+        czyste = zwaliduj(nazwa, a)
+    except wal.BladWejscia as e:
+        return ok({"blad": f"niepoprawny argument — {e}", "narzedzie": nazwa})
+
+    def w_watku():
+        with _ZAMEK:
+            return _obsluz(nazwa, czyste)
+
+    try:
+        wynik = await asyncio.wait_for(asyncio.to_thread(w_watku), CZAS_NARZEDZIA_S)
+        return [TextContent(type="text", text=wal.wynik_nie_za_duzy(wynik))]
+    except asyncio.TimeoutError:
+        return ok({"blad": f"przekroczono limit {CZAS_NARZEDZIA_S} s", "narzedzie": nazwa})
+    except wal.BladWejscia as e:
+        return ok({"blad": str(e), "narzedzie": nazwa})
+    except Exception as e:
+        # bez śladu stosu i bez ścieżek — tylko typ i krótki powód
+        return ok({"blad": f"{type(e).__name__}: {str(e)[:120]}", "narzedzie": nazwa})
+
+
+def _obsluz(nazwa: str, a: dict) -> str:
+    def ok(x):
+        return json.dumps(x, ensure_ascii=False, indent=1)
 
     try:
         if nazwa == "vgm_odczyt":
@@ -588,11 +700,18 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
                  "vgm_skrypty_pine": lambda a: sesja.skrypty_pine(),
                  "vgm_zrodlo_pine": lambda a: sesja.zrodlo_pine(a["id"]),
                  "vgm_zapisz_pine": lambda a: sesja.zapisz_pine(a["kod"], a["nazwa"]),
-                 "vgm_usun_pine": lambda a: sesja.usun_pine(a["id"]),
+                 "vgm_usun_pine": lambda a: _usun_pine(a),
                  "vgm_strategie_wbudowane": lambda a: sesja.strategie_wbudowane(),
                  "vgm_tester_raport": lambda a: sesja.tester_raport()}
         if nazwa in SESJA:
             import sesja
+
+            def _usun_pine(a):
+                # nieodwracalne — model nie może tego zrobić jednym, domyślnym wywołaniem
+                if a.get("potwierdz") is not True:
+                    raise wal.BladWejscia("usunięcie jest nieodwracalne — dodaj potwierdz=true")
+                return sesja.usun_pine(a["id"])
+
             try:
                 return ok(SESJA[nazwa](a))
             except sesja.BladSesji as e:
@@ -641,8 +760,6 @@ async def wywolaj(nazwa: str, a: dict) -> list[TextContent]:
                 if nazwa == "vgm_przeglad_instrumentow":
                     import pomiar
                     inst = a.get("instrumenty")
-                    if inst:
-                        inst = [tuple(x) for x in inst]
                     return ok(pomiar.przeglad_instrumentow(inst, a.get("po_ilu", 10)))
                 if nazwa == "vgm_wykres_symbol":
                     return ok(wykres.ustaw_symbol(a["symbol"]))

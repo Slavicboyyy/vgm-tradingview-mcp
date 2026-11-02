@@ -14,8 +14,14 @@ from __future__ import annotations
 import json
 import os
 import time
+import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import walidacja as wal  # noqa: E402
 
 try:
     import websocket
@@ -31,7 +37,13 @@ def _wykryj_port() -> int:
     """
     z_env = os.environ.get("VGM_CDP_PORT")
     if z_env:
-        return int(z_env)
+        try:
+            port = int(z_env)
+        except ValueError:
+            port = 0
+        if not 1 <= port <= 65535:
+            raise RuntimeError(f"VGM_CDP_PORT={z_env!r} nie jest portem (1–65535)")
+        return port
     for p in (9333, 9556, 9222):
         try:
             urllib.request.urlopen(f"http://localhost:{p}/json/version", timeout=2)
@@ -50,6 +62,16 @@ class BladWykresu(Exception):
     """Cokolwiek, co uniemożliwia sterowanie wykresem — z czytelnym powodem."""
 
 
+def _to_tradingview(url: str) -> bool:
+    """Host karty to tradingview.com albo jego subdomena, po HTTPS.
+
+    Samo `"tradingview.com" in url` łapie też evil.com/?tradingview.com
+    i tradingview.com.evil.com — wykonywalibyśmy kod na obcej stronie."""
+    u = urllib.parse.urlsplit(url)
+    h = u.hostname or ""
+    return u.scheme == "https" and (h == "tradingview.com" or h.endswith(".tradingview.com"))
+
+
 def _karta():
     if websocket is None:
         raise BladWykresu(
@@ -64,7 +86,7 @@ def _karta():
         ) from e
 
     for t in json.loads(surowe):
-        if "tradingview.com" in t.get("url", ""):
+        if t.get("type", "page") == "page" and _to_tradingview(t.get("url", "")):
             return t
     raise BladWykresu(
         "żadna karta nie ma otwartego TradingView — otwórz wykres i spróbuj ponownie")
@@ -186,9 +208,10 @@ def otworz_karte(symbol: str = "FX:EURUSD", interwal: str | None = None,
     przeciążeniu, sesja się skończy. Bez tego każde narzędzie wykresu
     przestaje działać, choć nic nie jest zepsute.
     """
+    symbol = wal.symbol(symbol)
     adres = f"https://www.tradingview.com/chart/?symbol={urllib.parse.quote(symbol)}"
     if interwal:
-        adres += f"&interval={urllib.parse.quote(str(interwal))}"
+        adres += f"&interval={urllib.parse.quote(wal.interwal(interwal))}"
 
     zad = urllib.request.Request(f"http://localhost:{PORT}/json/new?{adres}",
                                  method="PUT")
@@ -269,7 +292,7 @@ def rysunki() -> list:
 # ── zmiany ──────────────────────────────────────────────────────────────
 def ustaw_symbol(symbol: str) -> dict:
     """Zmienia instrument na wykresie."""
-    s = json.dumps(symbol)
+    s = json.dumps(wal.symbol(symbol))
     return _sprawdz(_wykonaj(_na_wykresie(f"""
         ch.setSymbol({s});
         return {{ok: true, symbol: {s}}};
@@ -278,7 +301,7 @@ def ustaw_symbol(symbol: str) -> dict:
 
 def ustaw_interwal(interwal: str) -> dict:
     """Zmienia przedział czasu. Przyjmuje 1, 5, 15, 60, 240, D, W, M."""
-    i = json.dumps(str(interwal))
+    i = json.dumps(wal.interwal(interwal))
     return _sprawdz(_wykonaj(_na_wykresie(f"""
         ch.setResolution({i});
         return {{ok: true, interwal: {i}}};
@@ -287,9 +310,10 @@ def ustaw_interwal(interwal: str) -> dict:
 
 def ustaw_typ(typ: int) -> dict:
     """Zmienia typ wykresu. 0 słupki, 1 świece, 3 linia, 9 Heikin Ashi."""
+    typ = wal.calkowita(typ, "typ", 0, 30)
     return _sprawdz(_wykonaj(_na_wykresie(f"""
-        ch.setChartType({int(typ)});
-        return {{ok: true, typ: {int(typ)}}};
+        ch.setChartType({typ});
+        return {{ok: true, typ: {typ}}};
     """)))
 
 
@@ -300,7 +324,7 @@ def swiece(ile: int = 100) -> dict:
     źródła danych ani konta. Ile świec jest dostępnych, zależy od tego, ile
     wykres zdążył wczytać — zwykle kilkaset.
     """
-    n = max(1, min(int(ile), 5000))
+    n = wal.calkowita(ile, "ile", 1, 5000)
     w = _sprawdz(_wykonaj(_na_wykresie(f"""
         var cw = ch._chartWidget;
         if (!cw) return {{blad: 'brak dostępu do modelu wykresu'}};
@@ -341,6 +365,14 @@ def zrzut(sciezka: str | None = None, zamknij_okna: bool = True) -> dict:
     import base64
     import pathlib
     import tempfile
+
+    import walidacja
+
+    if sciezka is not None:
+        try:
+            sciezka = str(walidacja.sciezka_do_zapisu(sciezka))
+        except walidacja.BladWejscia as e:
+            raise BladWykresu(str(e)) from e
 
     if zamknij_okna:
         try:
@@ -436,6 +468,7 @@ def dodaj_wskaznik(nazwa: str, czekaj_na_dane: bool = True,
     Dlatego domyślnie czekamy, aż wskaźnik zacznie zwracać liczby, i mówimy wprost,
     gdy się nie doczekał.
     """
+    nazwa = wal.tekst(nazwa, "nazwa", 120)
     n = json.dumps(nazwa)
     w = _sprawdz(_wykonaj(_na_wykresie(f"""
         var cel = (ch._chartWidget && ch._chartWidget.createStudy) ? ch._chartWidget : ch;
@@ -472,7 +505,7 @@ def dodaj_wskaznik(nazwa: str, czekaj_na_dane: bool = True,
 
 def usun_wskaznik(identyfikator: str) -> dict:
     """Usuwa jeden wskaźnik po identyfikatorze z `wskazniki()`."""
-    i = json.dumps(identyfikator)
+    i = json.dumps(wal.identyfikator(identyfikator))
     return _sprawdz(_wykonaj(_na_wykresie(f"""
         var lista = ch.getAllStudies();
         for (var k = 0; k < lista.length; k++) {{
@@ -607,7 +640,7 @@ def przelacz(symbol: str, interwal: str | None = None, sekund: float = 30) -> di
     z publicznego punktu, a gdy się nie zgadza, przeładowujemy stronę z symbolem
     w adresie. To zawsze daje właściwe dane, tylko trwa dłużej.
     """
-    ustaw_symbol(symbol)
+    ustaw_symbol(symbol)          # waliduje symbol, zanim cokolwiek ruszy
     if interwal:
         ustaw_interwal(interwal)
 

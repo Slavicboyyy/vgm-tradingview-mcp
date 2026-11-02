@@ -23,6 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import siec  # noqa: E402
+import walidacja as wal  # noqa: E402
 import wykres  # noqa: E402
 
 ODSTEP_S = 1.2
@@ -95,16 +97,25 @@ def _naglowki() -> dict:
 
 
 def _pobierz(url: str) -> object:
+    try:
+        siec.sprawdz_adres(url)    # przed _naglowki(): ciasteczka nie opuszczają procesu dla obcego hosta
+    except siec.BladSieci as e:
+        raise BladSesji(str(e)) from e
     _odczekaj()
     zad = urllib.request.Request(url, headers=_naglowki())
     try:
-        return json.loads(urllib.request.urlopen(zad, timeout=30).read().decode("utf-8"))
+        return json.loads(siec.pobierz(zad, timeout=30).decode("utf-8"))
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             raise BladSesji(f"TradingView odmówił ({e.code}) — sesja wygasła?") from e
         if e.code == 429:
             raise BladSesji("za dużo zapytań (429) — zatrzymuję się, nie ponawiam") from e
         raise BladSesji(f"HTTP {e.code} przy {url[:60]}") from e
+    except siec.BladSieci as e:
+        raise BladSesji(str(e)) from e
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # URLError i timeout gniazda, a także nie-JSON w odpowiedzi
+        raise BladSesji(f"{type(e).__name__}: {str(e)[:80]}") from e
 
 
 def alerty() -> dict:
@@ -156,6 +167,7 @@ def skrypty_pine() -> dict:
 
 def zrodlo_pine(id_skryptu: str) -> dict:
     """Kod źródłowy zapisanego skryptu po identyfikatorze z `skrypty_pine`."""
+    id_skryptu = wal.identyfikator(id_skryptu)
     d = _pobierz("https://pine-facade.tradingview.com/pine-facade/get/"
                  f"{urllib.parse.quote(id_skryptu, safe='')}/last")
     if isinstance(d, dict):
@@ -205,7 +217,7 @@ def _pine_api(kod_js: str, czekaj: float = 60):
 def zapisz_pine(kod: str, nazwa: str) -> dict:
     """Zapisuje nowy skrypt Pine na koncie. Zmierzone: lista rośnie o jeden,
     zwraca success i identyfikator."""
-    k, n = json.dumps(kod), json.dumps(nazwa)
+    k, n = json.dumps(wal.kod_pine(kod)), json.dumps(wal.nazwa_skryptu(nazwa))
     w = _pine_api(f"var r=await p.saveNewScript({{source:{k},name:{n}}});"
                   "var l=await p.listSavedScripts();"
                   f"var t=l.filter(function(x){{return x.scriptName==={n}}});"
@@ -218,7 +230,7 @@ def zapisz_pine(kod: str, nazwa: str) -> dict:
 
 def usun_pine(id_skryptu: str) -> dict:
     """Usuwa zapisany skrypt po identyfikatorze z `skrypty_pine`."""
-    i = json.dumps(id_skryptu)
+    i = json.dumps(wal.identyfikator(id_skryptu))
     w = _pine_api(f"var r=await p.deleteScript({i}); var l=await p.listSavedScripts();"
                   "return {usuniety:String(r)==='ok'||r===undefined||!!(r&&r.success), zapisanych_teraz:l.length};")
     if isinstance(w, dict) and "blad" in w:
