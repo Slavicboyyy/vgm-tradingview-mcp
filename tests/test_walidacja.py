@@ -1,4 +1,6 @@
 """Walidacja wejścia od klienta: symbole, przedziały, liczby, listy, filtry, ścieżki."""
+import os
+
 import pytest
 
 import pola
@@ -102,34 +104,98 @@ def test_kod_pine_limit_dlugosci():
 
 
 # ── ścieżki ─────────────────────────────────────────────────────────────
-def test_odczyt_pliku_tylko_z_katalogu_bazowego(tmp_path):
-    (tmp_path / "ok.pine").write_text("//@version=5")
-    assert wal.sciezka_do_odczytu("ok.pine", tmp_path) == (tmp_path / "ok.pine").resolve()
+@pytest.fixture
+def katalog_pine(monkeypatch, tmp_path):
+    """Katalog ustawiony jawnie w VGM_KATALOG_PINE — jedyne miejsce odczytu."""
+    baza = tmp_path / "pine"
+    baza.mkdir()
+    monkeypatch.setenv("VGM_KATALOG_PINE", str(baza))
+    return baza
 
-    poza = tmp_path.parent / "tajne.txt"
+
+def test_odczyt_pliku_tylko_z_katalogu_bazowego(katalog_pine, tmp_path):
+    (katalog_pine / "ok.pine").write_text("//@version=5")
+    (katalog_pine / "ok.txt").write_text("//@version=5")
+    assert wal.sciezka_do_odczytu("ok.pine") == (katalog_pine / "ok.pine").resolve()
+    assert wal.sciezka_do_odczytu("ok.txt") == (katalog_pine / "ok.txt").resolve()
+    assert wal.sciezka_do_odczytu(str(katalog_pine / "ok.pine")) == (katalog_pine / "ok.pine").resolve()
+
+    poza = tmp_path / "tajne.txt"
     poza.write_text("klucz")
     for zla in (str(poza), "../tajne.txt", "/etc/passwd", "sub/../../tajne.txt"):
         with pytest.raises(wal.BladWejscia):
-            wal.sciezka_do_odczytu(zla, tmp_path)
+            wal.sciezka_do_odczytu(zla)
 
 
-def test_odczyt_pliku_dowiazanie_na_zewnatrz_odrzucone(tmp_path):
-    cel = tmp_path.parent / "poza_bazy.pine"
+@pytest.mark.parametrize("wartosc", [None, "", "   "])
+def test_odczyt_bez_vgm_katalog_pine_odrzucony(monkeypatch, tmp_path, wartosc):
+    # bez jawnie ustawionej zmiennej nie zgadujemy katalogu — nawet roboczego
+    (tmp_path / "ok.pine").write_text("//@version=5")
+    monkeypatch.chdir(tmp_path)
+    if wartosc is None:
+        monkeypatch.delenv("VGM_KATALOG_PINE", raising=False)
+    else:
+        monkeypatch.setenv("VGM_KATALOG_PINE", wartosc)
+    with pytest.raises(wal.BladWejscia, match="VGM_KATALOG_PINE"):
+        wal.sciezka_do_odczytu("ok.pine")
+    with pytest.raises(wal.BladWejscia, match="VGM_KATALOG_PINE"):
+        wal.sciezka_do_odczytu(str(tmp_path / "ok.pine"))
+
+
+def test_odczyt_vgm_katalog_pine_wzgledny_albo_nie_katalog(monkeypatch, tmp_path):
+    (tmp_path / "ok.pine").write_text("//@version=5")
+    monkeypatch.chdir(tmp_path)
+    for zla in (".", "pine", str(tmp_path / "ok.pine"), str(tmp_path / "nie_ma")):
+        monkeypatch.setenv("VGM_KATALOG_PINE", zla)
+        with pytest.raises(wal.BladWejscia, match="VGM_KATALOG_PINE"):
+            wal.sciezka_do_odczytu("ok.pine")
+
+
+def test_odczyt_pliku_dowiazanie_na_zewnatrz_odrzucone(katalog_pine, tmp_path):
+    cel = tmp_path / "poza_bazy.pine"
     cel.write_text("sekret")
-    baza = tmp_path / "baza"
-    baza.mkdir()
-    (baza / "link.pine").symlink_to(cel)
+    (katalog_pine / "link.pine").symlink_to(cel)
     with pytest.raises(wal.BladWejscia):
-        wal.sciezka_do_odczytu("link.pine", baza)
+        wal.sciezka_do_odczytu("link.pine")
 
 
-def test_odczyt_pliku_rozszerzenie_rozmiar_katalog(tmp_path):
-    (tmp_path / "klucz.pem").write_text("x")
-    (tmp_path / "duzy.pine").write_bytes(b"x" * (wal.MAX_PLIK_PINE + 1))
-    (tmp_path / "katalog.pine").mkdir()
-    for zla in ("klucz.pem", "duzy.pine", "katalog.pine", "nie_ma.pine"):
+def test_odczyt_pliku_dowiazanie_rozwiazywane_do_celu(katalog_pine):
+    # dowiązanie wewnątrz katalogu: liczy się cel, z jego rozszerzeniem
+    (katalog_pine / "skrypt.pine").write_text("//@version=5")
+    (katalog_pine / "klucz.pem").write_text("x")
+    (katalog_pine / "alias.pine").symlink_to(katalog_pine / "skrypt.pine")
+    (katalog_pine / "przebrany.pine").symlink_to(katalog_pine / "klucz.pem")
+    assert wal.sciezka_do_odczytu("alias.pine") == (katalog_pine / "skrypt.pine").resolve()
+    with pytest.raises(wal.BladWejscia, match=".pine i .txt"):
+        wal.sciezka_do_odczytu("przebrany.pine")
+
+
+def test_katalog_bazowy_przez_dowiazanie_jest_rozwiazywany(monkeypatch, tmp_path):
+    prawdziwy = tmp_path / "prawdziwy"
+    prawdziwy.mkdir()
+    (prawdziwy / "a.pine").write_text("//@version=5")
+    (tmp_path / "skrot").symlink_to(prawdziwy, target_is_directory=True)
+    monkeypatch.setenv("VGM_KATALOG_PINE", str(tmp_path / "skrot"))
+    assert wal.sciezka_do_odczytu("a.pine") == (prawdziwy / "a.pine").resolve()
+
+
+def test_odczyt_pliku_rozszerzenie_rozmiar_katalog(katalog_pine):
+    (katalog_pine / "klucz.pem").write_text("x")
+    (katalog_pine / "bez_rozszerzenia").write_text("x")
+    (katalog_pine / "duzy.pine").write_bytes(b"x" * (wal.MAX_PLIK_PINE + 1))
+    (katalog_pine / "graniczny.pine").write_bytes(b"x" * wal.MAX_PLIK_PINE)
+    (katalog_pine / "katalog.pine").mkdir()
+    for zla in ("klucz.pem", "bez_rozszerzenia", "duzy.pine", "katalog.pine", "nie_ma.pine"):
         with pytest.raises(wal.BladWejscia):
-            wal.sciezka_do_odczytu(zla, tmp_path)
+            wal.sciezka_do_odczytu(zla)
+    assert wal.sciezka_do_odczytu("graniczny.pine").name == "graniczny.pine"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="brak os.mkfifo")
+def test_odczyt_tylko_zwykly_plik_nie_fifo(katalog_pine):
+    os.mkfifo(katalog_pine / "potok.pine")
+    with pytest.raises(wal.BladWejscia, match="zwykły plik"):
+        wal.sciezka_do_odczytu("potok.pine")
 
 
 def test_zapis_zrzutu_tylko_png_w_katalogu_bazowym(tmp_path):

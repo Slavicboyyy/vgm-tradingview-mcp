@@ -144,7 +144,6 @@ def kompletnosc_serwera():
     spis wygląda kompletnie, testy ścieżkowe przechodzą.
 
     Tu sprawdzamy sam rozdział wywołań, bez dotykania rynku, żeby test był szybki.
-    Pełny przebieg z prawdziwymi argumentami: .narzedzia/sprawdz_wszystkie.py
     """
     import asyncio
 

@@ -5,7 +5,7 @@ Wykres cofa się do wybranej daty i idzie świeca po świecy. W tym trybie
 TradingView pozwala też otwierać pozycje papierowe, więc da się przejść
 strategię ręcznie i zobaczyć wynik bez ryzyka.
 
-Zmierzone na koncie pro_premium przez CDP (port 9333): `_replayApi` daje
+Zmierzone przez CDP na zalogowanym koncie TradingView: `_replayApi` daje
 38 metod. Działają: selectDate, doStep, toggleAutoplay, changeAutoplayDelay,
 stopReplay, showReplayToolbar.
 

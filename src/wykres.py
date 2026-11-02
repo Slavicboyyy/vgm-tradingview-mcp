@@ -2,8 +2,8 @@
 """VGM MCP — warstwa wykresu. Steruje otwartą kartą TradingView przez CDP.
 
 W przeciwieństwie do warstwy danych ta wymaga uruchomionej przeglądarki
-z otwartą kartą TradingView. Port bierze ze zmiennej VGM_CDP_PORT,
-domyślnie 9222 (tyle mają zwykle przeglądarki uruchomione z debugowaniem).
+z otwartą kartą TradingView. Port bierze wyłącznie ze zmiennej VGM_CDP_PORT;
+bez niej warstwa wykresu zgłasza czytelny błąd, a `zdrowie()` mówi, czego brakuje.
 
 Sięga po wewnętrzne API strony: `window.TradingViewApi._activeChartWidgetWV.value()`.
 To nie jest udokumentowane przez TradingView i może przestać działać po ich
@@ -35,38 +35,28 @@ except ImportError:  # pragma: no cover
     websocket = None
 
 
-def _wykryj_port() -> int:
-    """Port CDP: ze zmiennej VGM_CDP_PORT, a bez niej pierwszy, który odpowiada.
-
-    Kolejność sprawdzania odpowiada temu, co mamy u siebie: 9333 to aplikacja
-    VGM Terminal z zalogowaną sesją TradingView, 9556 to CW3 Browser bez sesji,
-    9222 to domyślny port każdej przeglądarki uruchomionej z debugowaniem.
-    """
-    z_env = os.environ.get("VGM_CDP_PORT")
-    if z_env:
-        try:
-            port = int(z_env)
-        except ValueError:
-            port = 0
-        if not 1 <= port <= 65535:
-            raise RuntimeError(f"VGM_CDP_PORT={z_env!r} nie jest portem (1–65535)")
-        return port
-    for p in (9333, 9556, 9222):
-        try:
-            urllib.request.urlopen(f"http://localhost:{p}/json/version", timeout=2)
-            return p
-        except Exception:
-            continue
-    return 9222
-
-
-PORT = _wykryj_port()
 API = "window.TradingViewApi._activeChartWidgetWV.value()"
 _licznik = [0]
 
 
 class BladWykresu(Exception):
     """Cokolwiek, co uniemożliwia sterowanie wykresem — z czytelnym powodem."""
+
+
+def _port_cdp() -> int:
+    """Port zdalnego debugowania przeglądarki — tylko ze zmiennej VGM_CDP_PORT.
+
+    Nie ma wartości domyślnej ani sprawdzania kolejnych portów: czytany przy
+    każdym użyciu, więc zły albo brakujący port nie blokuje importu modułu,
+    tylko daje błąd narzędzia wykresu."""
+    z_env = os.environ.get("VGM_CDP_PORT", "").strip()
+    if not z_env:
+        raise BladWykresu(
+            "brak zmiennej VGM_CDP_PORT — ustaw ją na port, z którym uruchomiono "
+            "przeglądarkę (flaga --remote-debugging-port)")
+    if not (z_env.isascii() and z_env.isdigit()) or not 1 <= int(z_env) <= 65535:
+        raise BladWykresu(f"VGM_CDP_PORT={z_env[:20]!r} nie jest portem (1–65535)")
+    return int(z_env)
 
 
 def _to_tradingview(url: str) -> bool:
@@ -83,13 +73,14 @@ def _karta() -> Json:
     if websocket is None:
         raise BladWykresu(
             "brakuje pakietu websocket-client — zainstaluj: pip install websocket-client")
+    port = _port_cdp()
     try:
         surowe = urllib.request.urlopen(
-            f"http://localhost:{PORT}/json", timeout=10).read()
+            f"http://localhost:{port}/json", timeout=10).read()
     except Exception as e:
         raise BladWykresu(
-            f"przeglądarka nie odpowiada na porcie {PORT} ({type(e).__name__}). "
-            "Uruchom ją z debugowaniem albo ustaw VGM_CDP_PORT."
+            f"przeglądarka nie odpowiada na porcie {port} ({type(e).__name__}). "
+            "Uruchom ją z debugowaniem na tym porcie albo popraw VGM_CDP_PORT."
         ) from e
 
     for t in json.loads(surowe):
@@ -226,8 +217,13 @@ def _adres_wykresu(symbol: str, interwal: str | None) -> str:
 # ── odczyt ──────────────────────────────────────────────────────────────
 def zdrowie() -> Json:
     """Czy da się sterować wykresem — sprawdź to przed resztą."""
-    wynik: Json = {"port": PORT, "przegladarka": False, "karta_tv": False,
-             "api_wykresu": False, "gotowy": False}
+    wynik: Json = {"port": None, "przegladarka": False, "karta_tv": False,
+                   "api_wykresu": False, "gotowy": False}
+    try:
+        wynik["port"] = _port_cdp()
+    except BladWykresu as e:
+        wynik["powod"] = str(e)
+        return wynik
     try:
         k = _karta()
         wynik["przegladarka"] = True
@@ -261,15 +257,16 @@ def otworz_karte(symbol: str = "FX:EURUSD", interwal: str | None = None,
     przestaje działać, choć nic nie jest zepsute.
     """
     adres = _adres_wykresu(symbol, interwal)
+    port = _port_cdp()
 
-    zad = urllib.request.Request(f"http://localhost:{PORT}/json/new?{adres}",
+    zad = urllib.request.Request(f"http://localhost:{port}/json/new?{adres}",
                                  method="PUT")
     try:
         odp = json.loads(urllib.request.urlopen(zad, timeout=25).read())
     except Exception as e:
         raise BladWykresu(
             f"nie udało się otworzyć karty ({type(e).__name__}). "
-            f"Sprawdź, czy przeglądarka słucha na porcie {PORT}."
+            f"Sprawdź, czy przeglądarka słucha na porcie {port}."
         ) from e
 
     koniec = time.time() + sekund

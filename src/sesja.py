@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """VGM MCP — warstwa sesji. Funkcje dostępne tylko po zalogowaniu na TradingView.
 
-Zmierzone na koncie pro_premium przez CDP aplikacji VGM Terminal (port 9333):
+Zmierzone przez CDP na zalogowanym koncie TradingView:
 - alerty: 208 rekordów przez pricealerts.tradingview.com
 - zapisane skrypty Pine: 59 przez pine-facade.tradingview.com
 - lista obserwowanych: 29 symboli odczytanych z panelu wykresu

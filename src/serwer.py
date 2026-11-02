@@ -170,7 +170,8 @@ async def lista_narzedzi() -> list[Tool]:
              description=("Czy da się sterować wykresem: czy przeglądarka odpowiada, "
                           "czy jest karta z TradingView, czy strona udostępnia API. "
                           "Sprawdź to przed każdym innym narzędziem wykresu. "
-                          "Port bierze ze zmiennej VGM_CDP_PORT."),
+                          "Port bierze tylko ze zmiennej VGM_CDP_PORT; bez niej "
+                          "zwraca port=null i powód."),
              inputSchema={"type": "object", "properties": {}}),
 
         Tool(name="vgm_wykres_stan",
@@ -753,7 +754,7 @@ def _obsluz(nazwa: str, a: dict[str, Any]) -> str:
         # ── wykres ──────────────────────────────────────────────────────
         # Lista musi obejmować KAŻDE narzędzie tej grupy — narzędzie spoza niej
         # jest zadeklarowane, ale nieobsługiwane, i zwraca "nieznane narzędzie".
-        # Pilnuje tego .narzedzia/sprawdz_wszystkie.py, który woła wszystkie po kolei.
+        # Pilnuje tego tests/test_serwer_lista.py (każde narzędzie ma obsługę).
         if nazwa.startswith(("vgm_wykres", "vgm_wskaznik", "vgm_swiece",
                              "vgm_zmierz", "vgm_porownaj_progi",
                              "vgm_przeglad_",          # wskaznikow ORAZ instrumentow

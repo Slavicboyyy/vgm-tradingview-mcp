@@ -118,7 +118,11 @@ def sprawdz_plik(sciezka: str) -> dict[str, Any]:
     """To samo, ale czyta kod z pliku."""
     try:
         p = wal.sciezka_do_odczytu(sciezka)
-        kod = p.read_text(encoding="utf-8")
+        with open(p, "rb") as f:     # limit także przy czytaniu: plik mógł urosnąć po sprawdzeniu
+            surowe = f.read(wal.MAX_PLIK_PINE + 1)
+        if len(surowe) > wal.MAX_PLIK_PINE:
+            raise wal.BladWejscia(f"sciezka: plik większy niż {wal.MAX_PLIK_PINE} bajtów")
+        kod = surowe.decode("utf-8")
     except (wal.BladWejscia, UnicodeDecodeError, OSError) as e:
         raise BladPine(str(e)) from e
     w = sprawdz(kod)

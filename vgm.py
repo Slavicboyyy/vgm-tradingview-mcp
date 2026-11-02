@@ -8,7 +8,7 @@
     vgm zgodnosc FX:EURUSD               ile przedziałów mówi to samo
     vgm porownaj FX:EURUSD FX:GBPUSD     instrumenty obok siebie
     vgm skan trend                       przegląd rynku
-    vgm pine plik.pine                   sprawdzenie kodu Pine
+    vgm pine plik.pine                   sprawdzenie kodu Pine (plik z VGM_KATALOG_PINE)
     vgm wykres stan                      co jest na wykresie
     vgm wykres symbol FX:EURUSD          zmiana instrumentu
     vgm wykres zrzut                     obraz wykresu do pliku
