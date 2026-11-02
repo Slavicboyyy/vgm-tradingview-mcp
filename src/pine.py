@@ -99,9 +99,10 @@ def _podglad(kod: str, bledy: list) -> str:
     kawalki = []
     for b in bledy[:10]:
         nr = b.get("linia")
+        etykieta = nr if isinstance(nr, int) else "?"
         tresc = linie[nr - 1] if isinstance(nr, int) and 1 <= nr <= len(linie) else "?"
         wciecie = " " * max(0, (b.get("kolumna") or 1) - 1)
-        kawalki.append(f"{nr:>4} | {tresc}\n     | {wciecie}^-- {b['komunikat']}")
+        kawalki.append(f"{etykieta:>4} | {tresc}\n     | {wciecie}^-- {b['komunikat']}")
     return "\n".join(kawalki)
 
 
